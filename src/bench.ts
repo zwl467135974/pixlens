@@ -1,7 +1,7 @@
 /** 验收基准模式（doc/04 性能要求 §3）：
  *  冷缓存运行（--bench-clear）：P2 扫描、P3 首 60 张出图、P4 滚动帧率、P6 翻页、P7 大图平移
  *  热缓存运行（无 --bench-clear）：P5 二次打开出图 */
-import { ipc, type Entry } from "./ipc";
+import { ipc, thumbUrl, imageUrl, type Entry } from "./ipc";
 import type { Grid } from "./grid/grid";
 import type { BenchConfig } from "./ipc";
 import type { Viewer } from "./viewer/viewer";
@@ -93,6 +93,23 @@ async function viewerBench(
   }
   log("P6_coldjump_avg_ms", avg(cold));
   log("P6_coldjump_max_ms", Math.max(...cold));
+
+  // P8：PSD/PSB 专项（存在时）——按大小取前 3（优先巨型文件）
+  const psds = entries
+    .filter((e) => e.ext === "psd" || e.ext === "psb")
+    .sort((a, b) => b.size - a.size)
+    .slice(0, 3);
+  for (const e of psds) {
+    const tag = e.name.replace(/[^A-Za-z0-9_\u4e00-\u9fa5]+/g, "_");
+    let t0 = performance.now();
+    const r1 = await fetch(thumbUrl(e, 256));
+    await r1.arrayBuffer();
+    log(`P8_thumb_${tag}_ms`, performance.now() - t0);
+    t0 = performance.now();
+    const r2 = await fetch(imageUrl(e, 2560));
+    await r2.arrayBuffer();
+    log(`P8_preview_${tag}_ms`, performance.now() - t0);
+  }
 
   // P7：图库中存在大图（>5MB）时，100% 缩放平移 8s
   const big = entries.reduce((a, b) => (b.size > a.size ? b : a));

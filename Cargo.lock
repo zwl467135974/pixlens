@@ -1964,6 +1964,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "memmap2"
+version = "0.5.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83faa42c0a078c393f6b29d5db232d8be22776a891f8f56e5284faee4a20b327"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "memoffset"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2472,10 +2481,12 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "image",
+ "memmap2",
  "notify",
  "num_cpus",
  "parking_lot",
  "percent-encoding",
+ "rayon",
  "serde",
  "serde_json",
  "tauri",

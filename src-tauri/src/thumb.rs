@@ -184,9 +184,12 @@ fn get_thumb(state: &ThumbState, src: &str, w: u32) -> std::io::Result<ThumbOutp
         return Ok(ThumbOutput { bytes, mime: "image/jpeg" });
     }
 
-    // PSD / PSB：M3 实现自研解析器，当前返回占位
+    // PSD / PSB：1036 内嵌缩略图快路径 → 无内嵌则合成图跨步解码（doc/03 §6.2）
     if ext == "psd" || ext == "psb" {
-        return Ok(placeholder());
+        let out = psd_thumb(state, &path, w)?;
+        let _ = fs::write(&cache, &out.bytes);
+        state.note_write();
+        return Ok(out);
     }
 
     let _permit = state.sem.acquire();
@@ -203,8 +206,34 @@ fn get_thumb(state: &ThumbState, src: &str, w: u32) -> std::io::Result<ThumbOutp
     Ok(ThumbOutput { bytes: buf, mime: "image/jpeg" })
 }
 
-fn cache_key(path: &Path, size: u64, mtime: u64, w: u32) -> String {
-    let mut h = blake3::Hasher::new();
+/// PSD/PSB 缩略图：mmap → 1036 内嵌 JPEG 快路径；无内嵌则合成图跨步解码缩略
+fn psd_thumb(state: &ThumbState, path: &Path, w: u32) -> std::io::Result<ThumbOutput> {
+    let invalid = |e: crate::codecs::psd::PsdError| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+    };
+    let file = fs::File::open(path)?;
+    let mmap = unsafe { memmap2::Mmap::map(&file)? };
+    let info = crate::codecs::psd::parse(&mmap).map_err(invalid)?;
+
+    // 快路径：内嵌缩略图（JFIF JPEG），毫秒级
+    if let Some(jpeg) = crate::codecs::psd::embedded_thumbnail(&mmap, &info) {
+        return Ok(ThumbOutput { bytes: jpeg, mime: "image/jpeg" });
+    }
+
+    // 合成图：跨步解码直接到缩略尺寸
+    let _permit = state.sem.acquire();
+    let composite = crate::codecs::psd::decode_composite(&mmap, &info, w).map_err(invalid)?;
+    let img = DynamicImage::ImageRgba8(composite.image);
+    let thumb = downscale(img, w);
+    let rgb = flatten_alpha(thumb);
+    let mut buf: Vec<u8> = Vec::with_capacity(16 * 1024);
+    let enc = JpegEncoder::new_with_quality(&mut buf, JPEG_QUALITY);
+    rgb.write_with_encoder(enc)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    Ok(ThumbOutput { bytes: buf, mime: "image/jpeg" })
+}
+
+fn cache_key(path: &Path, size: u64, mtime: u64, w: u32) -> String {    let mut h = blake3::Hasher::new();
     h.update(path.to_string_lossy().as_bytes());
     h.update(b"|");
     h.update(&size.to_le_bytes());

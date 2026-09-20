@@ -121,11 +121,11 @@ fn get_frame(state: &ThumbState, src: &str, max_dim: u32) -> std::io::Result<Fra
         return passthrough(&path, &ext, None);
     }
 
-    // 全尺寸：浏览器原生格式透传；TIFF 走 Rust 全量解码；PSD/PSB 占位（M3）
+    // 全尺寸：浏览器原生格式透传；TIFF 走 Rust 全量解码；PSD/PSB 走自研解析器
     if max_dim == 0 {
         return match ext.as_str() {
             "jpg" | "jpeg" | "png" | "webp" | "bmp" | "ico" => passthrough(&path, &ext, None),
-            "psd" | "psb" => Ok(placeholder_frame(Some((512, 512)))),
+            "psd" | "psb" => psd_frame(state, &path, 0),
             "tif" | "tiff" => {
                 let _permit = state.view_sem.acquire();
                 let img = thumb::decode_with_limits(&path)
@@ -153,7 +153,7 @@ fn get_frame(state: &ThumbState, src: &str, max_dim: u32) -> std::io::Result<Fra
     }
 
     if matches!(ext.as_str(), "psd" | "psb") {
-        return Ok(placeholder_frame(Some((512, 512))));
+        return psd_frame(state, &path, max_dim);
     }
     let _permit = state.view_sem.acquire();
     let img = thumb::decode_with_limits(&path)
@@ -163,6 +163,62 @@ fn get_frame(state: &ThumbState, src: &str, max_dim: u32) -> std::io::Result<Fra
     let out = encode_frame(preview, PREVIEW_JPEG_QUALITY, Some((w, h)))?;
     let _ = fs::write(&cache, &out.bytes);
     state.note_write();
+    Ok(out)
+}
+
+/// PSD/PSB 整帧：跨步预览（max_dim>0，走磁盘缓存）或全量合成（max_dim=0，超护栏降级 8192）
+fn psd_frame(state: &ThumbState, path: &Path, max_dim: u32) -> std::io::Result<FrameOutput> {
+    let invalid = |e: crate::codecs::psd::PsdError| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+    };
+    let file = fs::File::open(path)?;
+    let mmap = unsafe { memmap2::Mmap::map(&file)? };
+    let info = crate::codecs::psd::parse(&mmap).map_err(invalid)?;
+    let mtime = file
+        .metadata()?
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    if max_dim > 0 {
+        // 预览：磁盘缓存（键含 mtime）
+        let cache = state.cache_dir.join(format!(
+            "v{}_{}.jpg",
+            blake3_key(path, file.metadata()?.len(), mtime),
+            max_dim
+        ));
+        if let Ok(bytes) = fs::read(&cache) {
+            return Ok(FrameOutput {
+                bytes,
+                mime: "image/jpeg".into(),
+                natural: Some((info.width, info.height)),
+            });
+        }
+    }
+
+    let _permit = state.view_sem.acquire();
+    let composite = match crate::codecs::psd::decode_composite(&mmap, &info, max_dim) {
+        Ok(c) => c,
+        // 巨型文件全量被护栏拒绝 → 降级为 8192 预览（金字塔分块属 v1.1）
+        Err(crate::codecs::psd::PsdError::TooLarge(_)) if max_dim == 0 => {
+            crate::codecs::psd::decode_composite(&mmap, &info, 8192).map_err(invalid)?
+        }
+        Err(e) => return Err(invalid(e)),
+    };
+    let natural = (composite.width, composite.height);
+    let img = image::DynamicImage::ImageRgba8(composite.image);
+    let quality = if max_dim == 0 { FULL_JPEG_QUALITY } else { PREVIEW_JPEG_QUALITY };
+    let out = encode_frame(img, quality, Some(natural))?;
+    if max_dim > 0 {
+        let cache = state.cache_dir.join(format!(
+            "v{}_{}.jpg",
+            blake3_key(path, file.metadata()?.len(), mtime),
+            max_dim
+        ));
+        let _ = fs::write(&cache, &out.bytes);
+        state.note_write();
+    }
     Ok(out)
 }
 

@@ -1,3 +1,4 @@
+pub mod codecs;
 mod scan;
 mod thumb;
 mod viewer;
@@ -73,6 +74,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
+            // 解码并行池 = 物理核数（doc/03 §2）
+            let _ = rayon::ThreadPoolBuilder::new()
+                .num_threads(num_cpus::get_physical())
+                .build_global();
             let state = AppState {
                 thumb: thumb::ThumbState::new(app.handle()),
                 watcher: Mutex::new(None),
