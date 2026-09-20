@@ -1,5 +1,6 @@
 mod scan;
 mod thumb;
+mod viewer;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -98,6 +99,35 @@ pub fn run() {
                     .header("Content-Type", out.mime)
                     .header("Content-Length", len)
                     .header("Access-Control-Allow-Origin", "*")
+                    .body(out.bytes)
+                    .unwrap_or_else(|e| {
+                        tauri::http::Response::builder()
+                            .status(500)
+                            .body(e.to_string().into_bytes())
+                            .unwrap()
+                    });
+                responder.respond(resp);
+            });
+        })
+        .register_asynchronous_uri_scheme_protocol("image", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let uri = request.uri().clone();
+            if cfg!(debug_assertions) {
+                println!("[viewer] 收到请求 {uri}");
+            }
+            std::thread::spawn(move || {
+                let out = {
+                    let state = app.state::<AppState>();
+                    viewer::handle(&state.thumb, &uri)
+                };
+                let mut builder = tauri::http::Response::builder()
+                    .header("Content-Type", out.mime.clone())
+                    .header("Content-Length", out.bytes.len())
+                    .header("Access-Control-Allow-Origin", "*");
+                if let Some((w, h)) = out.natural {
+                    builder = builder.header("X-PixLens-Natural", format!("{w}x{h}"));
+                }
+                let resp = builder
                     .body(out.bytes)
                     .unwrap_or_else(|e| {
                         tauri::http::Response::builder()

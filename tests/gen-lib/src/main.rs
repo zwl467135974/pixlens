@@ -90,6 +90,9 @@ fn main() {
     let mut count: usize = 1000;
     let mut out = PathBuf::from("tests/out/LIB-S");
     let mut seed: u64 = 0x853c_49e6_748f_ea9b;
+    // --size WxH：固定尺寸（LIB-XL 50MP 用）；--kind jpg：仅生成 JPG
+    let mut fixed_size: Option<(u32, u32)> = None;
+    let mut only_jpg = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -105,12 +108,29 @@ fn main() {
                 seed = args[i + 1].parse().expect("--seed 需要数字");
                 i += 1;
             }
+            "--size" => {
+                let (w, h) = args[i + 1].split_once('x').expect("--size 需要 WxH");
+                fixed_size = Some((w.parse().expect("宽需数字"), h.parse().expect("高需数字")));
+                i += 1;
+            }
+            "--kind" => {
+                only_jpg = args[i + 1] == "jpg";
+                i += 1;
+            }
+            "--xl" => {} // 预设开关，循环后处理
             other => {
                 eprintln!("未知参数: {other}");
                 std::process::exit(2);
             }
         }
         i += 1;
+    }
+    // 预设：LIB-XL = 50MP JPG × 20（P7 验收用）
+    if args.iter().any(|a| a == "--xl") {
+        count = 20;
+        out = PathBuf::from("tests/out/LIB-XL");
+        fixed_size = Some((8688, 5792));
+        only_jpg = true;
     }
 
     std::fs::create_dir_all(&out).expect("创建输出目录失败");
@@ -123,11 +143,10 @@ fn main() {
             let mut rng = Rng::new(seed ^ (idx as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
             let name = format!("img_{}", idx);
             let path = out.join(&name);
-            let kind = rng.below(100);
+            let kind = if only_jpg { 0 } else { rng.below(100) };
             let result = if kind < 70 {
-                // JPG：0.5~5MP
-                let w = rng.range(800, 2800);
-                let h = rng.range(600, 2000);
+                // JPG：0.5~5MP（--size 时固定尺寸）
+                let (w, h) = fixed_size.unwrap_or((rng.range(800, 2800), rng.range(600, 2000)));
                 let img = gen_frame(w, h, &mut rng);
                 let f = BufWriter::new(File::create(path.with_extension("jpg")).expect("创建文件失败"));
                 let enc = JpegEncoder::new_with_quality(f, 85);

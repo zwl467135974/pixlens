@@ -28,10 +28,16 @@ export interface BenchConfig {
 
 /** Windows 下自定义协议经 http://<scheme>.localhost 访问（wry 行为） */
 const THUMB_BASE = "http://thumb.localhost/pixlens";
+const IMAGE_BASE = "http://image.localhost/pixlens";
 
 /** v=mtime 用于击穿浏览器缓存：文件修改后同一 URL 也能刷新 */
 export function thumbUrl(e: Entry, w: number): string {
   return `${THUMB_BASE}?src=${encodeURIComponent(e.path)}&w=${w}&v=${e.mtime}`;
+}
+
+/** 查看器整帧：maxDim=0 全尺寸，>0 为降采样预览 */
+export function imageUrl(e: Entry, maxDim: number): string {
+  return `${IMAGE_BASE}?src=${encodeURIComponent(e.path)}&maxDim=${maxDim}&v=${e.mtime}`;
 }
 
 export const ipc = {

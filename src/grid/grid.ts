@@ -16,6 +16,8 @@ export class Grid {
   tileSize = 160;
   /** 缩略图加载完成回调（bench 埋点用） */
   onThumbLoaded: (e: Entry) => void = () => {};
+  /** tile 点击回调（进入查看器） */
+  onTileClick: (e: Entry) => void = () => {};
 
   constructor(container: HTMLElement) {
     this.el = container;
@@ -103,6 +105,7 @@ export class Grid {
       Math.floor(idx / this.cols) * this.rowH
     }px)`;
     tile.title = e.name;
+    tile.addEventListener("click", () => this.onTileClick(e));
     const img = document.createElement("img");
     img.decoding = "async";
     img.alt = e.name;

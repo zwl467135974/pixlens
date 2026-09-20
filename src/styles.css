@@ -200,6 +200,119 @@ body {
   text-overflow: ellipsis;
 }
 
+/* ── 大图查看器 ─────────────────────── */
+#viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #111116;
+  display: flex;
+}
+
+#viewer.hidden {
+  display: none;
+}
+
+#viewer-canvas {
+  position: absolute;
+  inset: 0;
+  cursor: grab;
+}
+
+#viewer-canvas:active {
+  cursor: grabbing;
+}
+
+#viewer-gif {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  user-select: none;
+  pointer-events: none;
+  will-change: transform;
+}
+
+#viewer-info {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(20, 20, 26, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--fg);
+  max-width: 40vw;
+  pointer-events: none;
+}
+
+#viewer-info .row {
+  margin: 2px 0;
+}
+
+#viewer-info .name {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+#viewer-info .dim {
+  color: var(--fg-dim);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+#viewer-bar {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(28, 28, 36, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 10px;
+}
+
+#viewer-bar button {
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+#viewer-bar button:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+#viewer-bar .vsep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+}
+
+#viewer-bar select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+
+#viewer-bar .zoom {
+  color: var(--fg-dim);
+  min-width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── 滚动条 ─────────────────────────── */
 #grid::-webkit-scrollbar {
   width: 12px;

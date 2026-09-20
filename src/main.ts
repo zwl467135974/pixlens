@@ -4,10 +4,13 @@ import { listen } from "@tauri-apps/api/event";
 import { ipc, type Entry, type FsChanged } from "./ipc";
 import { AppState, type SortDir, type SortKey } from "./state";
 import { Grid } from "./grid/grid";
+import { Viewer } from "./viewer/viewer";
 import { runBench } from "./bench";
 
 const state = new AppState();
 const grid = new Grid(document.getElementById("grid") as HTMLElement);
+const viewer = new Viewer(document.getElementById("app") as HTMLElement, () => state.view);
+grid.onTileClick = (e) => viewer.open(e.path);
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const els = {
@@ -134,6 +137,7 @@ async function boot(): Promise<void> {
     await runBench(
       bench,
       grid,
+      viewer,
       (entries) => {
         state.setAll(entries);
         grid.setTileSize(128);

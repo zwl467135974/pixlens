@@ -64,7 +64,10 @@ const MAX_DECODE_ALLOC: u64 = 1_500_000_000;
 
 pub struct ThumbState {
     pub cache_dir: PathBuf,
+    /// 缩略图解码限流门
     pub sem: Gate,
+    /// 查看器整帧解码限流门（独立于缩略图，避免翻页被滚动解码积压拖慢）
+    pub view_sem: Gate,
     pub max_cache_bytes: u64,
     writes: AtomicUsize,
 }
@@ -81,6 +84,7 @@ impl ThumbState {
         Self {
             cache_dir,
             sem: Gate::new(permits),
+            view_sem: Gate::new(permits),
             max_cache_bytes: DEFAULT_CACHE_LIMIT,
             writes: AtomicUsize::new(0),
         }
@@ -171,7 +175,7 @@ fn get_thumb(state: &ThumbState, src: &str, w: u32) -> std::io::Result<ThumbOutp
         let _permit = state.sem.acquire();
         let bytes = fs::read(&path)?;
         let _ = fs::write(&cache, &bytes);
-        note_write(state);
+        state.note_write();
         return Ok(ThumbOutput { bytes, mime });
     }
 
@@ -195,7 +199,7 @@ fn get_thumb(state: &ThumbState, src: &str, w: u32) -> std::io::Result<ThumbOutp
     rgb.write_with_encoder(enc)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let _ = fs::write(&cache, &buf);
-    note_write(state);
+    state.note_write();
     Ok(ThumbOutput { bytes: buf, mime: "image/jpeg" })
 }
 
@@ -210,7 +214,7 @@ fn cache_key(path: &Path, size: u64, mtime: u64, w: u32) -> String {
     format!("{}_{}", &hex[..24], w)
 }
 
-fn decode_with_limits(path: &Path) -> image::ImageResult<DynamicImage> {
+pub(crate) fn decode_with_limits(path: &Path) -> image::ImageResult<DynamicImage> {
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_DIMENSION);
     limits.max_image_height = Some(MAX_DIMENSION);
@@ -221,7 +225,7 @@ fn decode_with_limits(path: &Path) -> image::ImageResult<DynamicImage> {
 }
 
 /// 目标宽内缩放（不放大）
-fn downscale(img: DynamicImage, w: u32) -> DynamicImage {
+pub(crate) fn downscale(img: DynamicImage, w: u32) -> DynamicImage {
     if img.width() <= w {
         return img;
     }
@@ -230,7 +234,7 @@ fn downscale(img: DynamicImage, w: u32) -> DynamicImage {
 }
 
 /// 带透明通道的图压到深色底上，避免黑底/白底突兀
-fn flatten_alpha(img: DynamicImage) -> image::RgbImage {
+pub(crate) fn flatten_alpha(img: DynamicImage) -> image::RgbImage {
     match img {
         DynamicImage::ImageRgba8(rgba) => {
             let (w, h) = rgba.dimensions();
@@ -263,12 +267,15 @@ fn placeholder() -> ThumbOutput {
     ThumbOutput { bytes: buf, mime: "image/jpeg" }
 }
 
-fn note_write(state: &ThumbState) {
-    let n = state.writes.fetch_add(1, Ordering::Relaxed) + 1;
-    if n % 128 == 0 {
-        let dir = state.cache_dir.clone();
-        let max = state.max_cache_bytes;
-        std::thread::spawn(move || evict_if_needed(&dir, max));
+impl ThumbState {
+    /// 记录一次缓存写入，周期性触发 LRU 淘汰
+    pub fn note_write(&self) {
+        let n = self.writes.fetch_add(1, Ordering::Relaxed) + 1;
+        if n % 128 == 0 {
+            let dir = self.cache_dir.clone();
+            let max = self.max_cache_bytes;
+            std::thread::spawn(move || evict_if_needed(&dir, max));
+        }
     }
 }
 
