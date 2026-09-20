@@ -26,6 +26,33 @@ export interface BenchConfig {
   exit: boolean;
 }
 
+export interface RenamePair {
+  path: string;
+  name: string;
+  newName: string;
+  conflict: boolean;
+  reason: string;
+}
+
+export interface ConvertOptions {
+  format: string;
+  quality: number;
+  scaleMode: string;
+  scaleValue: number;
+  outPolicy: string;
+  outDir?: string | null;
+}
+
+export interface BatchProgress {
+  jobId: number;
+  done: number;
+  failed: number;
+  total: number;
+  current: string;
+  canceled: boolean;
+  finished: boolean;
+}
+
 /** Windows 下自定义协议经 http://<scheme>.localhost 访问（wry 行为） */
 const THUMB_BASE = "http://thumb.localhost/pixlens";
 const IMAGE_BASE = "http://image.localhost/pixlens";
@@ -49,6 +76,13 @@ export const ipc = {
   benchClearCache: () => invoke<void>("bench_clear_cache"),
   benchDone: () => invoke<void>("bench_done"),
   logBench: (metric: string, value: number) => invoke<void>("log_bench", { metric, value }),
+  renamePreview: (paths: string[], template: string, start: number) =>
+    invoke<RenamePair[]>("batch_rename_preview", { paths, template, start }),
+  renameApply: (pairs: [string, string][]) =>
+    invoke<[number, string[]]>("batch_rename_apply", { pairs }),
+  batchConvert: (paths: string[], opts: ConvertOptions) =>
+    invoke<number>("batch_convert", { paths, opts }),
+  batchCancel: (jobId: number) => invoke<boolean>("batch_cancel", { jobId }),
 };
 
 export function fmtSize(n: number): string {

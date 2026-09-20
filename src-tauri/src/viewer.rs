@@ -385,7 +385,7 @@ fn blake3_key(path: &Path, size: u64, mtime: u64) -> String {
 }
 
 /// 长边缩到 max_dim（不放大）
-fn downscale_to(img: image::DynamicImage, max_dim: u32) -> image::DynamicImage {
+pub(crate) fn downscale_to(img: image::DynamicImage, max_dim: u32) -> image::DynamicImage {
     let long = img.width().max(img.height());
     if long <= max_dim {
         return img;

@@ -1,7 +1,9 @@
 /** 验收基准模式（doc/04 性能要求 §3）：
- *  冷缓存运行（--bench-clear）：P2 扫描、P3 首 60 张出图、P4 滚动帧率、P6 翻页、P7 大图平移
+ *  冷缓存运行（--bench-clear）：P2 扫描、P3 首 60 张出图、P4 滚动帧率、P6 翻页、P7 大图平移、
+ *  P8 PSD/PSB、M4 TIFF/HDR、M5 批量转换
  *  热缓存运行（无 --bench-clear）：P5 二次打开出图 */
-import { ipc, thumbUrl, imageUrl, type Entry } from "./ipc";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { ipc, thumbUrl, imageUrl, type BatchProgress, type Entry } from "./ipc";
 import type { Grid } from "./grid/grid";
 import type { BenchConfig } from "./ipc";
 import type { Viewer } from "./viewer/viewer";
@@ -55,7 +57,7 @@ export async function runBench(
 
   if (cfg.clear) {
     await scrollBench(grid, log);
-    await viewerBench(viewer, res.entries, log);
+    await viewerBench(cfg.folder, viewer, res.entries, log);
   }
 
   if (cfg.exit) {
@@ -67,6 +69,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** P6 翻页响应（预取 ±2）+ P7 大图 100% 平移帧率 */
 async function viewerBench(
+  folder: string,
   viewer: Viewer,
   entries: Entry[],
   log: (m: string, v: number) => void,
@@ -164,6 +167,79 @@ async function viewerBench(
     await viewer.benchPan(SCROLL_TEST_MS, log);
   }
   viewer.close();
+
+  // M5：批量转换（全量可转文件）——吞吐 + UI 帧率 + 进度准确 + 取消
+  await batchBench(folder, entries, log);
+}
+
+/** M5 验收：1 万张批量转换无卡死、可取消、进度准确 */
+async function batchBench(
+  folder: string,
+  entries: Entry[],
+  log: (m: string, v: number) => void,
+): Promise<void> {
+  const convExt = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "tif", "tiff"]);
+  const conv = entries.filter((e) => convExt.has(e.ext));
+  if (conv.length < 500) return;
+  const outDir = folder.replace(/[\\/][^\\/]+$/, "") + "\\bench_out";
+
+  const events: BatchProgress[] = [];
+  const un: UnlistenFn = await listen<BatchProgress>("batch-progress", (ev) => events.push(ev.payload));
+
+  // UI 帧率监控（转换期间主线程不应被阻塞）
+  let frames = 0;
+  let fpsStop = false;
+  const raf = () => {
+    if (fpsStop) return;
+    frames++;
+    requestAnimationFrame(raf);
+  };
+  requestAnimationFrame(raf);
+
+  const t0 = performance.now();
+  const jobId = await ipc.batchConvert(
+    conv.map((e) => e.path),
+    { format: "jpg", quality: 80, scaleMode: "percent", scaleValue: 30, outPolicy: "subdir", outDir },
+  );
+  const waitFinish = async (id: number, timeoutMs: number): Promise<BatchProgress | null> => {
+    const start = performance.now();
+    for (;;) {
+      const fin = events.find((e) => e.jobId === id && e.finished);
+      if (fin) return fin;
+      if (performance.now() - start > timeoutMs) return null;
+      await sleep(100);
+    }
+  };
+  const fin = await waitFinish(jobId, 300_000);
+  fpsStop = true;
+  if (fin) {
+    log("M5_convert_total_ms", performance.now() - t0);
+    log("M5_convert_count", conv.length);
+    log("M5_convert_done", fin.done);
+    log("M5_convert_failed", fin.failed);
+    log("M5_progress_accurate", fin.done + fin.failed === conv.length ? 1 : 0);
+  } else {
+    log("M5_convert_timeout", 1);
+  }
+  log("M5_convert_ui_fps_avg", frames / ((performance.now() - t0) / 1000));
+
+  // 取消测试：再提交 2000 张，600ms 后取消
+  const j2 = await ipc.batchConvert(conv.slice(0, 2000).map((e) => e.path), {
+    format: "jpg",
+    quality: 80,
+    scaleMode: "percent",
+    scaleValue: 30,
+    outPolicy: "subdir",
+    outDir,
+  });
+  await sleep(600);
+  await ipc.batchCancel(j2);
+  const fin2 = await waitFinish(j2, 60_000);
+  if (fin2) {
+    log("M5_cancel_ok", fin2.canceled ? 1 : 0);
+    log("M5_cancel_done_before_stop", fin2.done);
+  }
+  un();
 }
 
 function timedNext(viewer: Viewer, dir: 1 | -1): Promise<number> {

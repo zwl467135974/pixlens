@@ -14,10 +14,12 @@ export class Grid {
   private raf = 0;
 
   tileSize = 160;
+  /** tile 点击回调（选择，含修饰键信息） */
+  onTileClick: (e: Entry, ev: MouseEvent) => void = () => {};
+  /** tile 双击回调（进入查看器） */
+  onTileOpen: (e: Entry) => void = () => {};
   /** 缩略图加载完成回调（bench 埋点用） */
   onThumbLoaded: (e: Entry) => void = () => {};
-  /** tile 点击回调（进入查看器） */
-  onTileClick: (e: Entry) => void = () => {};
 
   constructor(container: HTMLElement) {
     this.el = container;
@@ -40,6 +42,15 @@ export class Grid {
 
   scrollBy(px: number): void {
     this.el.scrollTop += px;
+  }
+
+  /** 更新可见 tile 的选中态 */
+  setSelected(paths: Set<string>): void {
+    for (const [idx, tile] of this.tiles) {
+      const e = this.entries[idx];
+      if (!e) continue;
+      tile.classList.toggle("selected", paths.has(e.path));
+    }
   }
 
   get entryCount(): number {
@@ -105,7 +116,8 @@ export class Grid {
       Math.floor(idx / this.cols) * this.rowH
     }px)`;
     tile.title = e.name;
-    tile.addEventListener("click", () => this.onTileClick(e));
+    tile.addEventListener("click", (ev) => this.onTileClick(e, ev));
+    tile.addEventListener("dblclick", () => this.onTileOpen(e));
     const img = document.createElement("img");
     img.decoding = "async";
     img.alt = e.name;

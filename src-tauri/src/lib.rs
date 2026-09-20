@@ -1,4 +1,5 @@
 pub mod codecs;
+mod batch;
 mod scan;
 mod thumb;
 mod viewer;
@@ -150,6 +151,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             scan::scan_folder,
+            batch::batch_rename_preview,
+            batch::batch_rename_apply,
+            batch::batch_convert,
+            batch::batch_cancel,
             get_bench_config,
             bench_clear_cache,
             bench_done,

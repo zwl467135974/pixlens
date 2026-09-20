@@ -5,12 +5,58 @@ import { ipc, type Entry, type FsChanged } from "./ipc";
 import { AppState, type SortDir, type SortKey } from "./state";
 import { Grid } from "./grid/grid";
 import { Viewer } from "./viewer/viewer";
+import { BatchPanel } from "./batch/panel";
 import { runBench } from "./bench";
 
 const state = new AppState();
 const grid = new Grid(document.getElementById("grid") as HTMLElement);
 const viewer = new Viewer(document.getElementById("app") as HTMLElement, () => state.view);
-grid.onTileClick = (e) => viewer.open(e.path);
+
+/** 多选状态（Ctrl/Shift/拖选；双击进查看器） */
+const selected = new Set<string>();
+let anchorPath: string | null = null;
+
+const batchPanel = new BatchPanel(
+  document.getElementById("app") as HTMLElement,
+  () => [...selected],
+  () => {
+    els.btnBatch.disabled = selected.size === 0;
+  },
+);
+
+grid.onTileOpen = (e) => {
+  if (!selected.has(e.path)) {
+    selected.clear();
+    selected.add(e.path);
+    refreshSelection();
+  }
+  viewer.open(e.path);
+};
+grid.onTileClick = (e, ev) => {
+  if (ev.ctrlKey || ev.metaKey) {
+    if (selected.has(e.path)) selected.delete(e.path);
+    else selected.add(e.path);
+    anchorPath = e.path;
+  } else if (ev.shiftKey && anchorPath) {
+    const view = state.view;
+    const a = view.findIndex((x) => x.path === anchorPath);
+    const b = view.findIndex((x) => x.path === e.path);
+    if (a >= 0 && b >= 0) {
+      for (let i = Math.min(a, b); i <= Math.max(a, b); i++) selected.add(view[i].path);
+    }
+  } else {
+    selected.clear();
+    selected.add(e.path);
+    anchorPath = e.path;
+  }
+  refreshSelection();
+};
+
+function refreshSelection(): void {
+  grid.setSelected(selected);
+  els.btnBatch.disabled = selected.size === 0;
+  status();
+}
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const els = {
@@ -18,6 +64,7 @@ const els = {
   empty: $("empty"),
   btnOpen: $("btn-open"),
   btnOpen2: $("btn-open-2"),
+  btnBatch: $("btn-batch") as HTMLButtonElement,
   search: $("search") as HTMLInputElement,
   sortKey: $("sort-key") as HTMLSelectElement,
   sortDir: $("sort-dir"),
@@ -72,6 +119,7 @@ function status(extra = ""): void {
       ? `${shown === total ? total : `${shown} / ${total}`} 张图片 · ${folder}`
       : "";
   const parts: string[] = [];
+  if (selected.size) parts.push(`已选 ${selected.size} 张`);
   if (lastScanMs) parts.push(`扫描 ${lastScanMs.toFixed(0)}ms`);
   if (currentFolder && shown === 0 && state.filter)
     parts.push(`无匹配“${state.filter}”的文件`);
@@ -81,16 +129,31 @@ function status(extra = ""): void {
 
 function patchFs(p: FsChanged): void {
   state.patch(p);
+  if (p.removed.length) {
+    for (const r of p.removed) selected.delete(r);
+  }
+  // 更新/改名后旧路径失效
+  const live = new Set(state.all.map((e) => e.path));
+  for (const s of [...selected]) if (!live.has(s)) selected.delete(s);
   applyView();
+  refreshSelection();
 }
 
 function wireUi(): void {
   els.btnOpen.addEventListener("click", () => void openFolder());
   els.btnOpen2.addEventListener("click", () => void openFolder());
+  els.btnBatch.addEventListener("click", () => batchPanel.open());
   document.addEventListener("keydown", (ev) => {
     if (ev.ctrlKey && ev.key.toLowerCase() === "o") {
       ev.preventDefault();
       void openFolder();
+    }
+    // Ctrl+A 全选（查看器关闭、批量面板关闭时）
+    if (ev.ctrlKey && ev.key.toLowerCase() === "a" && currentFolder && !viewer.isOpen) {
+      ev.preventDefault();
+      selected.clear();
+      for (const e of state.view) selected.add(e.path);
+      refreshSelection();
     }
   });
 
