@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PixLens 图镜</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="toolbar">
+        <button id="btn-open" class="btn primary" title="Ctrl+O">打开文件夹</button>
+        <span class="sep"></span>
+        <label class="ctl">排序
+          <select id="sort-key">
+            <option value="name">名称</option>
+            <option value="mtime">修改时间</option>
+            <option value="size">大小</option>
+            <option value="type">类型</option>
+          </select>
+        </label>
+        <button id="sort-dir" class="btn icon" title="升序 / 降序">↓</button>
+        <span class="sep"></span>
+        <input id="search" type="text" placeholder="搜索文件名…" spellcheck="false" />
+        <span class="grow"></span>
+        <label class="ctl"><span id="size-label">160px</span>
+          <input id="size" type="range" min="96" max="512" step="8" value="160" />
+        </label>
+      </header>
+      <main id="grid-wrap">
+        <div id="empty">
+          <div class="empty-ring"></div>
+          <button id="btn-open-2" class="btn primary big">打开文件夹</button>
+          <p class="hint">选择一个包含图片的文件夹开始浏览 · Ctrl+O</p>
+        </div>
+        <div id="grid" class="hidden"></div>
+      </main>
+      <footer id="statusbar">
+        <span id="status-left"></span>
+        <span id="status-right"></span>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

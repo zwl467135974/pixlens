@@ -3,8 +3,8 @@ node_modules/
 dist/
 *.local
 
-# Rust / Tauri
-src-tauri/target/
+# Rust / Tauri（workspace 根 target 覆盖 src-tauri 与 gen-lib）
+target/
 src-tauri/gen/schemas/
 
 # 日志与本地缓存
@@ -23,3 +23,5 @@ Desktop.ini
 
 # 测试产物（合成图库等大型生成文件）
 tests/out/
+src-tauri/icons/android/
+src-tauri/icons/ios/

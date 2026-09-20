@@ -1,0 +1,34 @@
+[package]
+name = "pixlens"
+version = "0.1.0"
+description = "PixLens 图镜 — 免费轻快的本地看图软件"
+authors = ["Wyler"]
+edition = "2021"
+
+[lib]
+name = "pixlens_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = [
+    "jpeg",
+    "png",
+    "gif",
+    "webp",
+    "bmp",
+    "ico",
+    "tiff",
+] }
+walkdir = "2"
+notify = "8"
+blake3 = "1"
+parking_lot = "0.12"
+num_cpus = "1"
+percent-encoding = "2"
