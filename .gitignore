@@ -1,0 +1,25 @@
+# Node / Vite
+node_modules/
+dist/
+*.local
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# 日志与本地缓存
+*.log
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 测试产物（合成图库等大型生成文件）
+tests/out/

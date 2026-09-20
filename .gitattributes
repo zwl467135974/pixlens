@@ -1,0 +1,21 @@
+# 仓库内统一 LF，检出按平台
+* text=auto eol=lf
+
+# Windows 专用脚本保持 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制文件
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.psd binary
+*.psb binary
+*.tif binary
+*.tiff binary
+*.exe binary
+*.dll binary
