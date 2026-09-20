@@ -3,6 +3,7 @@
   "productName": "PixLens",
   "version": "0.1.0",
   "identifier": "com.pixlens.app",
+  "mainBinaryName": "pixlens",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -33,6 +34,27 @@
       "icons/128x128@2x.png",
       "icons/icon.ico",
       "icons/icon.icns"
-    ]
+    ],
+    "fileAssociations": [
+      { "ext": ["psd"], "name": "PSD 图像", "description": "Photoshop 文档", "role": "Viewer" },
+      { "ext": ["psb"], "name": "PSB 图像", "description": "Photoshop 大型文档", "role": "Viewer" },
+      { "ext": ["tif", "tiff"], "name": "TIFF 图像", "description": "TIFF 图像（含多页）", "role": "Viewer" },
+      { "ext": ["jpg", "jpeg"], "name": "JPEG 图像", "description": "JPEG 图像", "role": "Viewer" },
+      { "ext": ["png"], "name": "PNG 图像", "description": "PNG 图像", "role": "Viewer" },
+      { "ext": ["gif"], "name": "GIF 图像", "description": "GIF 动画", "role": "Viewer" },
+      { "ext": ["webp"], "name": "WebP 图像", "description": "WebP 图像", "role": "Viewer" },
+      { "ext": ["bmp"], "name": "BMP 图像", "description": "位图", "role": "Viewer" },
+      { "ext": ["avif"], "name": "AVIF 图像", "description": "AVIF 图像", "role": "Viewer" },
+      { "ext": ["svg"], "name": "SVG 图像", "description": "SVG 矢量图", "role": "Viewer" }
+    ],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false,
+        "installerHooks": "./nsis-hooks.nsh"
+      }
+    }
   }
 }

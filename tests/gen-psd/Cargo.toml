@@ -1,0 +1,9 @@
+[package]
+name = "gen-psd"
+version = "0.1.0"
+edition = "2021"
+description = "PSD/PSB 测试样本生成器（LIB-PSB，doc/04 §3.1）——开发工具，不随产品分发"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+pixlens = { path = "../../src-tauri" }

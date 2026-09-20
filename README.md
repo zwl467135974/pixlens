@@ -9,7 +9,21 @@
 
 ## 当前状态
 
-**M6 已完成**（2026-09-20）：基础编辑——裁剪（画布框选→原分辨率 ROI）、旋转/翻转保存、亮度/对比度/饱和度实时预览（CSS filter 与 Rust 同公式，预览=成品）、灰度/复古/反色滤镜、另存副本默认可覆盖。验收达标（见 `doc/验收记录.md`）。下一步：M7 安装包 + 文件关联 + 全量终验。
+**v1 完成（2026-09-20）**：M1~M7 全部里程碑交付并通过验收（见 `doc/验收记录.md`）——
+缩略图墙、Canvas 大图查看器、PSD/PSB 自研解析器、多页 TIFF、HDR 曝光、批量处理、基础编辑、
+NSIS 安装器（2.55MB）+ 文件关联 ×12 + 设置页。P1~P8/P11/P12 达标；P9/P10 应用进程达标（WebView2 运行时全树口径架构性超出，根因已归档）。
+
+## 构建与发布
+
+```bash
+pnpm install                 # 前端依赖
+pnpm tauri dev               # 开发运行
+pnpm tauri build             # 产出 NSIS 安装器 target/release/bundle/nsis/
+cargo test -p pixlens        # 14 项单元测试
+```
+
+验收基准：`PIXLENS_BENCH=<图库> [PIXLENS_BENCH_CLEAR=1] [PIXLENS_BENCH_FULL=1] pixlens.exe`，
+测试图库由 `tests/gen-lib`（LIB-S/M/XL/TIFF）与 `tests/gen-psd`（LIB-PSB，含 2GB PSB）生成。
 
 ## 文档索引
 
@@ -21,20 +35,13 @@
 | [doc/04-性能要求.md](doc/04-性能要求.md) | 性能指标验收表（含测量方法）、基准测试方案 |
 | [doc/05-里程碑计划.md](doc/05-里程碑计划.md) | M1~M7 分期计划、每期交付物与验收标准 |
 
-## 如何开工（新会话指引）
+## 后续开发（新会话指引）
 
-后续实施请在 **D:\work\pixlens** 目录下打开专门的 ZCode 会话，建议流程：
+在 **D:\work\pixlens** 目录打开 ZCode 会话，建议流程：
 
-1. 先通读 `doc/` 下全部五份文档
-2. 执行 `doc/02-技术选型.md` §6 的**开工前置检查**（MSVC 链接器、WebView2 运行时——截至设计定稿尚未验证）
-3. 按 `doc/05-里程碑计划.md` 从 M1 开始逐期实施，每期完成后执行该期验收标准，并将结果记入 `doc/验收记录.md`
-
-每期开场指令模板：
-
-```
-阅读 D:\work\pixlens\doc\ 全部文档，执行 02 文档的前置检查，
-然后实施 05 里程碑中的 M1，完成后按该期验收标准自测并汇报。
-```
+1. 通读 `doc/` 全部文档与 `doc/验收记录.md`
+2. backlog 项见 `doc/01-需求定义.md` §8（EXIF 面板、RAW、JPEG 无损旋转、双图对比、ICC、跨平台）
+3. 每次改动后跑 `cargo test -p pixlens` 与相关 P 指标基准，结果续写 `doc/验收记录.md`
 
 ## 关键决策速览
 

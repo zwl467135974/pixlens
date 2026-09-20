@@ -412,7 +412,7 @@ fn encode_frame(
     Ok(FrameOutput { bytes: buf, mime: "image/jpeg".into(), natural, pages: None })
 }
 
-fn placeholder_frame(natural: Option<(u32, u32)>, pages: Option<u32>) -> FrameOutput {
+fn placeholder_frame(natural: Option<(u32, u32)>, _pages: Option<u32>) -> FrameOutput {
     let mut img = image::RgbImage::from_pixel(512, 512, image::Rgb([58, 58, 66]));
     for p in img.pixels_mut() {
         p.0 = [p.0[0] / 2 + 29, p.0[1] / 2 + 29, p.0[2] / 2 + 33];

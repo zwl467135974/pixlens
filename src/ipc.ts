@@ -24,6 +24,13 @@ export interface BenchConfig {
   folder: string;
   clear: boolean;
   exit: boolean;
+  full: boolean;
+}
+
+export interface AppSettings {
+  cacheLimitMb: number;
+  defaultSort: string;
+  theme: string;
 }
 
 export interface RenamePair {
@@ -85,6 +92,10 @@ export const ipc = {
   batchCancel: (jobId: number) => invoke<boolean>("batch_cancel", { jobId }),
   editApply: (src: string, ops: unknown, overwrite: boolean, quality: number) =>
     invoke<string>("edit_apply", { src, ops, overwrite, quality }),
+  getSettings: () => invoke<AppSettings>("get_settings"),
+  setSettings: (settings: AppSettings) => invoke<number>("set_settings", { settings }),
+  getLaunchFile: () => invoke<string | null>("get_launch_file"),
+  benchMemory: () => invoke<number>("bench_memory"),
 };
 
 export function fmtSize(n: number): string {

@@ -23,6 +23,17 @@ export async function runBench(
 ): Promise<void> {
   const log = (metric: string, value: number) => ipc.logBench(metric, value);
 
+  // P10：空闲内存（空态页静置 4s）
+  if (cfg.full) {
+    await sleep(4000);
+    try {
+      const mem = await ipc.benchMemory();
+      log("P10_idle_memory_mb", mem / 1048576);
+    } catch {
+      log("P10_unavailable", 1);
+    }
+  }
+
   if (cfg.clear) {
     await ipc.benchClearCache();
   }
@@ -58,6 +69,43 @@ export async function runBench(
   if (cfg.clear) {
     await scrollBench(grid, log);
     await viewerBench(cfg.folder, viewer, res.entries, log);
+
+    // P9 / P12：全量终验项
+    if (cfg.full) {
+      // P9：万张墙持续滚动 5 分钟后进程树内存（目标 <400MB）
+      const scrollStart = performance.now();
+      const SCROLL_MS = 300_000;
+      await new Promise<void>((resolve) => {
+        const step = () => {
+          if (performance.now() - scrollStart >= SCROLL_MS) {
+            resolve();
+            return;
+          }
+          if (grid.isNearBottom()) grid.scrollToTop();
+          grid.scrollBy(60);
+          requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      });
+      log("P9_scroll_elapsed_s", (performance.now() - scrollStart) / 1000);
+      try {
+        const mem = await ipc.benchMemory();
+        log("P9_loaded_memory_mb", mem / 1048576);
+      } catch {
+        log("P9_unavailable", 1);
+      }
+
+      // P12：缓存上限设置生效（设 256MB → 淘汰后目录应 ≤ ~270MB，随后恢复）
+      try {
+        const cur = await ipc.getSettings();
+        const sizeMb = await ipc.setSettings({ ...cur, cacheLimitMb: 256 });
+        log("P12_cache_dir_mb", sizeMb);
+        log("P12_ok", sizeMb <= 270 ? 1 : 0);
+        await ipc.setSettings(cur);
+      } catch {
+        log("P12_unavailable", 1);
+      }
+    }
   }
 
   if (cfg.exit) {

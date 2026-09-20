@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use image::GenericImageView;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 #[derive(Deserialize, Clone, Copy, Debug, Default)]
 #[serde(rename_all = "camelCase")]

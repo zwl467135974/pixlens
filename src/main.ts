@@ -1,12 +1,13 @@
 /** 入口：装配 UI 事件、fs-changed 增量刷新、验收模式（doc/05 M1） */
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
-import { ipc, type Entry, type FsChanged } from "./ipc";
+import { ipc, type AppSettings, type Entry, type FsChanged } from "./ipc";
 import { AppState, type SortDir, type SortKey } from "./state";
 import { Grid } from "./grid/grid";
 import { Viewer } from "./viewer/viewer";
 import { BatchPanel } from "./batch/panel";
 import { EditorPanel } from "./editor/panel";
+import { SettingsPanel } from "./ui/settings-panel";
 import { runBench } from "./bench";
 
 const state = new AppState();
@@ -73,9 +74,22 @@ const els = {
   sortDir: $("sort-dir"),
   size: $("size") as HTMLInputElement,
   sizeLabel: $("size-label"),
+  btnSettings: $("btn-settings"),
   statusLeft: $("status-left"),
   statusRight: $("status-right"),
 };
+
+const settingsPanel = new SettingsPanel($("app") as HTMLElement, (s) => applySettings(s));
+
+function applySettings(s: AppSettings): void {
+  document.documentElement.dataset.theme = s.theme;
+  const key = s.defaultSort as SortKey;
+  if (state.sortKey !== key) {
+    state.setSort(key, state.sortDir);
+    els.sortKey.value = key;
+    if (currentFolder) applyView(false);
+  }
+}
 
 let currentFolder = "";
 let lastScanMs = 0;
@@ -146,6 +160,7 @@ function wireUi(): void {
   els.btnOpen.addEventListener("click", () => void openFolder());
   els.btnOpen2.addEventListener("click", () => void openFolder());
   els.btnBatch.addEventListener("click", () => batchPanel.open());
+  els.btnSettings.addEventListener("click", () => void settingsPanel.open());
   document.addEventListener("keydown", (ev) => {
     if (ev.ctrlKey && ev.key.toLowerCase() === "o") {
       ev.preventDefault();
@@ -194,6 +209,12 @@ function wireUi(): void {
 
 async function boot(): Promise<void> {
   wireUi();
+  // 启动即应用设置（主题 / 默认排序）
+  try {
+    applySettings(await ipc.getSettings());
+  } catch {
+    /* 默认深色 */
+  }
   const bench = await ipc.getBenchConfig();
   if (bench) {
     document.title = "PixLens 图镜 · 验收模式";
@@ -211,6 +232,14 @@ async function boot(): Promise<void> {
       },
       thumbLoadCbs,
     );
+    return;
+  }
+  // 双击关联文件启动：打开所在文件夹并直接进入查看器
+  const launch = await ipc.getLaunchFile();
+  if (launch) {
+    const dir = launch.replace(/[\\/][^\\/]+$/, "");
+    await openFolder(dir);
+    viewer.open(launch);
   }
 }
 

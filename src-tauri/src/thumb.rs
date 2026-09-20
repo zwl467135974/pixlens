@@ -68,7 +68,8 @@ pub struct ThumbState {
     pub sem: Gate,
     /// 查看器整帧解码限流门（独立于缩略图，避免翻页被滚动解码积压拖慢）
     pub view_sem: Gate,
-    pub max_cache_bytes: u64,
+    /// 缓存上限（设置页可改，原子生效）
+    pub max_cache_bytes: std::sync::atomic::AtomicU64,
     writes: AtomicUsize,
 }
 
@@ -85,7 +86,7 @@ impl ThumbState {
             cache_dir,
             sem: Gate::new(permits),
             view_sem: Gate::new(permits),
-            max_cache_bytes: DEFAULT_CACHE_LIMIT,
+            max_cache_bytes: std::sync::atomic::AtomicU64::new(DEFAULT_CACHE_LIMIT),
             writes: AtomicUsize::new(0),
         }
     }
@@ -302,7 +303,7 @@ impl ThumbState {
         let n = self.writes.fetch_add(1, Ordering::Relaxed) + 1;
         if n % 128 == 0 {
             let dir = self.cache_dir.clone();
-            let max = self.max_cache_bytes;
+            let max = self.max_cache_bytes.load(std::sync::atomic::Ordering::Relaxed);
             std::thread::spawn(move || evict_if_needed(&dir, max));
         }
     }
