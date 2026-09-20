@@ -222,7 +222,7 @@ fn psd_thumb(state: &ThumbState, path: &Path, w: u32) -> std::io::Result<ThumbOu
 
     // 合成图：跨步解码直接到缩略尺寸
     let _permit = state.sem.acquire();
-    let composite = crate::codecs::psd::decode_composite(&mmap, &info, w).map_err(invalid)?;
+    let composite = crate::codecs::psd::decode_composite(&mmap, &info, w, 1.0).map_err(invalid)?;
     let img = DynamicImage::ImageRgba8(composite.image);
     let thumb = downscale(img, w);
     let rgb = flatten_alpha(thumb);

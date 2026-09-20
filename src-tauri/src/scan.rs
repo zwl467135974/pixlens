@@ -15,6 +15,7 @@ use walkdir::WalkDir;
 /// 图片扩展名白名单（小写）
 pub const IMAGE_EXTS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "avif", "svg", "tif", "tiff", "psd", "psb",
+    "hdr",
 ];
 
 pub fn is_image_ext(ext: &str) -> bool {

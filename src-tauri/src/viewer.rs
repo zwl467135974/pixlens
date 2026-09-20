@@ -28,26 +28,31 @@ pub struct FrameOutput {
     pub mime: String,
     /// 原始尺寸（Rust 解码路径必填，透传路径为 None——由浏览器给出 naturalWidth）
     pub natural: Option<(u32, u32)>,
+    /// 多页文件总页数（仅 TIFF）
+    pub pages: Option<u32>,
 }
 
 pub fn handle(state: &ThumbState, uri: &tauri::http::Uri) -> FrameOutput {
-    let Some((src, max_dim)) = parse_query(uri) else {
-        return placeholder_frame(None);
+    let Some(req) = parse_query(uri) else {
+        return placeholder_frame(None, None);
     };
+    let (src, max_dim, page, exposure) = req;
     let t0 = Instant::now();
-    let out = match get_frame(state, &src, max_dim) {
+    let out = match get_frame(state, &src, max_dim, page, exposure) {
         Ok(out) => out,
         Err(e) => {
             println!("[viewer] 失败 {} : {e}", short_name(&src));
-            placeholder_frame(None)
+            placeholder_frame(None, None)
         }
     };
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
     if ms > 100.0 || cfg!(debug_assertions) {
         println!(
-            "[perf] image {} maxDim={} → {} B in {:.1} ms",
+            "[perf] image {} maxDim={} p{} e{:.2} → {} B in {:.1} ms",
             short_name(&src),
             max_dim,
+            page,
+            exposure,
             out.bytes.len(),
             ms
         );
@@ -62,19 +67,25 @@ fn short_name(p: &str) -> String {
         .unwrap_or_else(|| p.chars().take(40).collect())
 }
 
-fn parse_query(uri: &tauri::http::Uri) -> Option<(String, u32)> {
+/// (src, maxDim, page, exposure)
+fn parse_query(uri: &tauri::http::Uri) -> Option<(String, u32, u32, f32)> {
     let q = uri.query()?;
     let mut src: Option<String> = None;
     let mut max_dim: u32 = 0;
+    let mut page: u32 = 0;
+    let mut exposure: f32 = 1.0;
     for pair in q.split('&') {
         let (k, v) = pair.split_once('=')?;
         match k {
             "src" => src = Some(percent_decode_str(v).decode_utf8().ok()?.into_owned()),
             "maxDim" => max_dim = v.parse().unwrap_or(0),
+            "page" => page = v.parse().unwrap_or(0),
+            "e" => exposure = v.parse().unwrap_or(1.0),
             _ => {}
         }
     }
-    Some((src?, if max_dim == 0 { 0 } else { max_dim.clamp(256, 16384) }))
+    let exposure = if exposure.is_finite() { exposure.clamp(0.05, 16.0) } else { 1.0 };
+    Some((src?, if max_dim == 0 { 0 } else { max_dim.clamp(256, 16384) }, page, exposure))
 }
 
 fn mime_of(ext: &str) -> &'static str {
@@ -97,10 +108,17 @@ fn passthrough(path: &Path, ext: &str, natural: Option<(u32, u32)>) -> std::io::
         bytes: fs::read(path)?,
         mime: mime_of(ext).into(),
         natural,
+        pages: None,
     })
 }
 
-fn get_frame(state: &ThumbState, src: &str, max_dim: u32) -> std::io::Result<FrameOutput> {
+fn get_frame(
+    state: &ThumbState,
+    src: &str,
+    max_dim: u32,
+    page: u32,
+    exposure: f32,
+) -> std::io::Result<FrameOutput> {
     let path = PathBuf::from(&src);
     let md = fs::metadata(&path)?;
     if !md.is_file() {
@@ -121,19 +139,22 @@ fn get_frame(state: &ThumbState, src: &str, max_dim: u32) -> std::io::Result<Fra
         return passthrough(&path, &ext, None);
     }
 
-    // 全尺寸：浏览器原生格式透传；TIFF 走 Rust 全量解码；PSD/PSB 走自研解析器
+    // Radiance HDR：解码 + 色调映射（曝光参数）
+    if ext == "hdr" {
+        return hdr_frame(state, &path, max_dim, exposure);
+    }
+
+    // 多页 TIFF：指定页解码（页数经响应头返回前端）
+    if ext == "tif" || ext == "tiff" {
+        return tiff_frame(state, &path, max_dim, page, exposure);
+    }
+
+    // 全尺寸：浏览器原生格式透传；PSD/PSB 走自研解析器
     if max_dim == 0 {
         return match ext.as_str() {
             "jpg" | "jpeg" | "png" | "webp" | "bmp" | "ico" => passthrough(&path, &ext, None),
-            "psd" | "psb" => psd_frame(state, &path, 0),
-            "tif" | "tiff" => {
-                let _permit = state.view_sem.acquire();
-                let img = thumb::decode_with_limits(&path)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-                let (w, h) = (img.width(), img.height());
-                encode_frame(img, FULL_JPEG_QUALITY, Some((w, h)))
-            }
-            _ => Ok(placeholder_frame(None)),
+            "psd" | "psb" => psd_frame(state, &path, 0, exposure),
+            _ => Ok(placeholder_frame(None, None)),
         };
     }
 
@@ -148,12 +169,17 @@ fn get_frame(state: &ThumbState, src: &str, max_dim: u32) -> std::io::Result<Fra
             .map_err(|e| image::ImageError::IoError(e))
             .and_then(|r| r.into_dimensions())
         {
-            return Ok(FrameOutput { bytes, mime: "image/jpeg".into(), natural: Some((w, h)) });
+            return Ok(FrameOutput {
+                bytes,
+                mime: "image/jpeg".into(),
+                natural: Some((w, h)),
+                pages: None,
+            });
         }
     }
 
     if matches!(ext.as_str(), "psd" | "psb") {
-        return psd_frame(state, &path, max_dim);
+        return psd_frame(state, &path, max_dim, exposure);
     }
     let _permit = state.view_sem.acquire();
     let img = thumb::decode_with_limits(&path)
@@ -166,8 +192,125 @@ fn get_frame(state: &ThumbState, src: &str, max_dim: u32) -> std::io::Result<Fra
     Ok(out)
 }
 
+/// 多页 TIFF 指定页：预览缓存键含页码
+fn tiff_frame(
+    state: &ThumbState,
+    path: &Path,
+    max_dim: u32,
+    page: u32,
+    exposure: f32,
+) -> std::io::Result<FrameOutput> {
+    let md = fs::metadata(path)?;
+    let mtime = md
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    if max_dim > 0 {
+        let cache = state.cache_dir.join(format!(
+            "vt{}_{}_p{}.jpg",
+            blake3_key(path, md.len(), mtime),
+            max_dim,
+            page
+        ));
+        if let Ok(bytes) = fs::read(&cache) {
+            // 页数轻量获取：重解码一次太贵——缓存的预览命中时页数未知，
+            // 由前端在页面切换越界时兜底（decode_page 会返回明确错误）
+            if let Ok((w, h)) = tiff_first_dimensions(path) {
+                return Ok(FrameOutput {
+                    bytes,
+                    mime: "image/jpeg".into(),
+                    natural: Some((w, h)),
+                    pages: None,
+                });
+            }
+        }
+    }
+    let _permit = state.view_sem.acquire();
+    let t0 = std::time::Instant::now();
+    let tp = crate::codecs::tiff_pages::decode_page(path, page, exposure)?;
+    let pages = tp.pages;
+    let natural = (tp.width, tp.height);
+    let img = image::DynamicImage::ImageRgba8(tp.image);
+    let quality = if max_dim == 0 { FULL_JPEG_QUALITY } else { PREVIEW_JPEG_QUALITY };
+    let preview = if max_dim > 0 { downscale_to(img, max_dim) } else { img };
+    let out = encode_frame(preview, quality, Some(natural))?;
+    let out = FrameOutput { bytes: out.bytes, mime: out.mime, natural: out.natural, pages: Some(pages) };
+    if max_dim > 0 {
+        let cache = state.cache_dir.join(format!(
+            "vt{}_{}_p{}.jpg",
+            blake3_key(path, md.len(), mtime),
+            max_dim,
+            page
+        ));
+        let _ = fs::write(&cache, &out.bytes);
+        state.note_write();
+    }
+    let _ = t0;
+    Ok(out)
+}
+
+/// TIFF 首页尺寸（缓存命中路径补全 natural 用）
+fn tiff_first_dimensions(path: &Path) -> std::io::Result<(u32, u32)> {
+    use tiff::decoder::Decoder;
+    let file = fs::File::open(path)?;
+    let mut dec = Decoder::new(std::io::BufReader::new(file))
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    dec.dimensions()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
+}
+
+/// Radiance HDR：解码 + 曝光色调映射（预览缓存键含曝光）
+fn hdr_frame(state: &ThumbState, path: &Path, max_dim: u32, exposure: f32) -> std::io::Result<FrameOutput> {
+    let md = fs::metadata(path)?;
+    let mtime = md
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    if max_dim > 0 {
+        let cache = state.cache_dir.join(format!(
+            "vh{}_{}_e{}.jpg",
+            blake3_key(path, md.len(), mtime),
+            max_dim,
+            (exposure * 100.0).round() as i32
+        ));
+        if let Ok(bytes) = fs::read(&cache) {
+            if let Ok((w, h)) = image::ImageReader::open(path)
+                .map_err(|e| image::ImageError::IoError(e))
+                .and_then(|r| r.into_dimensions())
+            {
+                return Ok(FrameOutput {
+                    bytes,
+                    mime: "image/jpeg".into(),
+                    natural: Some((w, h)),
+                    pages: None,
+                });
+            }
+        }
+    }
+    let _permit = state.view_sem.acquire();
+    let rgba = crate::codecs::tiff_pages::decode_hdr(path, exposure)?;
+    let (w, h) = rgba.dimensions();
+    let img = image::DynamicImage::ImageRgba8(rgba);
+    let quality = if max_dim == 0 { FULL_JPEG_QUALITY } else { PREVIEW_JPEG_QUALITY };
+    let preview = if max_dim > 0 { downscale_to(img, max_dim) } else { img };
+    let out = encode_frame(preview, quality, Some((w, h)))?;
+    if max_dim > 0 {
+        let cache = state.cache_dir.join(format!(
+            "vh{}_{}_e{}.jpg",
+            blake3_key(path, md.len(), mtime),
+            max_dim,
+            (exposure * 100.0).round() as i32
+        ));
+        let _ = fs::write(&cache, &out.bytes);
+        state.note_write();
+    }
+    Ok(out)
+}
+
 /// PSD/PSB 整帧：跨步预览（max_dim>0，走磁盘缓存）或全量合成（max_dim=0，超护栏降级 8192）
-fn psd_frame(state: &ThumbState, path: &Path, max_dim: u32) -> std::io::Result<FrameOutput> {
+fn psd_frame(state: &ThumbState, path: &Path, max_dim: u32, exposure: f32) -> std::io::Result<FrameOutput> {
     let invalid = |e: crate::codecs::psd::PsdError| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
     };
@@ -181,28 +324,36 @@ fn psd_frame(state: &ThumbState, path: &Path, max_dim: u32) -> std::io::Result<F
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
 
+    // 曝光缓存键后缀（仅 32 位有视觉差异；为简单起见 16/8 位也纳入键——1.0 时无后缀，与旧缓存兼容）
+    let ekey = if (exposure - 1.0).abs() < f32::EPSILON {
+        String::new()
+    } else {
+        format!("_e{}", (exposure * 100.0).round() as i32)
+    };
     if max_dim > 0 {
         // 预览：磁盘缓存（键含 mtime）
         let cache = state.cache_dir.join(format!(
-            "v{}_{}.jpg",
+            "v{}_{}{}.jpg",
             blake3_key(path, file.metadata()?.len(), mtime),
-            max_dim
+            max_dim,
+            ekey
         ));
         if let Ok(bytes) = fs::read(&cache) {
             return Ok(FrameOutput {
                 bytes,
                 mime: "image/jpeg".into(),
                 natural: Some((info.width, info.height)),
+                pages: None,
             });
         }
     }
 
     let _permit = state.view_sem.acquire();
-    let composite = match crate::codecs::psd::decode_composite(&mmap, &info, max_dim) {
+    let composite = match crate::codecs::psd::decode_composite(&mmap, &info, max_dim, exposure) {
         Ok(c) => c,
         // 巨型文件全量被护栏拒绝 → 降级为 8192 预览（金字塔分块属 v1.1）
         Err(crate::codecs::psd::PsdError::TooLarge(_)) if max_dim == 0 => {
-            crate::codecs::psd::decode_composite(&mmap, &info, 8192).map_err(invalid)?
+            crate::codecs::psd::decode_composite(&mmap, &info, 8192, exposure).map_err(invalid)?
         }
         Err(e) => return Err(invalid(e)),
     };
@@ -212,9 +363,10 @@ fn psd_frame(state: &ThumbState, path: &Path, max_dim: u32) -> std::io::Result<F
     let out = encode_frame(img, quality, Some(natural))?;
     if max_dim > 0 {
         let cache = state.cache_dir.join(format!(
-            "v{}_{}.jpg",
+            "v{}_{}{}.jpg",
             blake3_key(path, file.metadata()?.len(), mtime),
-            max_dim
+            max_dim,
+            ekey
         ));
         let _ = fs::write(&cache, &out.bytes);
         state.note_write();
@@ -257,10 +409,10 @@ fn encode_frame(
     let enc = JpegEncoder::new_with_quality(&mut buf, quality);
     rgb.write_with_encoder(enc)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    Ok(FrameOutput { bytes: buf, mime: "image/jpeg".into(), natural })
+    Ok(FrameOutput { bytes: buf, mime: "image/jpeg".into(), natural, pages: None })
 }
 
-fn placeholder_frame(natural: Option<(u32, u32)>) -> FrameOutput {
+fn placeholder_frame(natural: Option<(u32, u32)>, pages: Option<u32>) -> FrameOutput {
     let mut img = image::RgbImage::from_pixel(512, 512, image::Rgb([58, 58, 66]));
     for p in img.pixels_mut() {
         p.0 = [p.0[0] / 2 + 29, p.0[1] / 2 + 29, p.0[2] / 2 + 33];
@@ -268,5 +420,5 @@ fn placeholder_frame(natural: Option<(u32, u32)>) -> FrameOutput {
     let mut buf: Vec<u8> = Vec::new();
     let enc = JpegEncoder::new_with_quality(&mut buf, 70);
     let _ = img.write_with_encoder(enc);
-    FrameOutput { bytes: buf, mime: "image/jpeg".into(), natural }
+    FrameOutput { bytes: buf, mime: "image/jpeg".into(), natural, pages: None }
 }

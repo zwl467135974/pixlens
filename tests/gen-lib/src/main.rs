@@ -87,6 +87,13 @@ fn gen_frame(w: u32, h: u32, rng: &mut Rng) -> RgbImage {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // 预设：LIB-TIFF = 多页 TIFF × 50 + Radiance HDR × 20（M4 验收用）
+    if args.iter().any(|a| a == "--tiff") {
+        let out = PathBuf::from("tests/out/LIB-TIFF");
+        std::fs::create_dir_all(&out).expect("创建输出目录失败");
+        gen_lib_tiff(&out);
+        return;
+    }
     let mut count: usize = 1000;
     let mut out = PathBuf::from("tests/out/LIB-S");
     let mut seed: u64 = 0x853c_49e6_748f_ea9b;
@@ -226,3 +233,47 @@ fn w_svg(rng: &mut Rng) -> u32 {
 fn h_svg(rng: &mut Rng) -> u32 {
     rng.range(300, 900)
 }
+
+/// LIB-TIFF：多页 TIFF（3~6 页 RGB8）× 50 + Radiance HDR（f32，亮度分布 0.2~6）× 20
+fn gen_lib_tiff(out: &std::path::Path) {
+    let t0 = std::time::Instant::now();
+    (0..50u32).into_par_iter().for_each(|idx| {
+        let mut rng = Rng::new(0x1234_5678 ^ (idx as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        let w = rng.range(800, 1600);
+        let h = rng.range(600, 1200);
+        let pages = rng.range(3, 7);
+        let path = out.join(format!("multi_{idx}_{pages}p.tif"));
+        let file = std::fs::File::create(&path).expect("创建文件失败");
+        let mut enc = tiff::encoder::TiffEncoder::new(std::io::BufWriter::new(file))
+            .expect("TIFF 编码器创建失败");
+        for _p in 0..pages {
+            // 每页独立随机内容（gen_frame 按 rng 推进，天然有页差异）
+            let img = gen_frame(w, h, &mut rng);
+            enc.write_image::<tiff::encoder::colortype::RGB8>(w, h, img.as_raw())
+                .expect("TIFF 页写入失败");
+        }
+    });
+    println!("多页 TIFF × 50 完成");
+
+    (0..20u32).into_par_iter().for_each(|idx| {
+        let mut rng = Rng::new(0x8765_4321 ^ (idx as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        let w = rng.range(640, 1400);
+        let h = rng.range(480, 1000);
+        let path = out.join(format!("hdr_{idx}.hdr"));
+        let file = std::fs::File::create(&path).expect("创建文件失败");
+        // 线性亮度 0.2~6.0（高光超出 [0,1]，检验曝光滑块效果）
+        let mut px: Vec<image::Rgb<f32>> = Vec::with_capacity((w * h) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let grad = 1.0 - (y as f32 / h as f32);
+                let base = 0.2 + 5.8 * (x as f32 / w as f32) * (0.4 + 0.6 * grad)
+                    * ((rng.next() & 0xff) as f32 / 255.0);
+                px.push(image::Rgb([base * 0.9, base, base * 1.1]));
+            }
+        }
+        let enc = image::codecs::hdr::HdrEncoder::new(std::io::BufWriter::new(file));
+        enc.encode(&px, w as usize, h as usize).expect("HDR 写入失败");
+    });
+    println!("Radiance HDR × 20 完成，总耗时 {:.1}s", t0.elapsed().as_secs_f64());
+}
+

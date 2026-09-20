@@ -10,5 +10,8 @@ image = { version = "0.25", default-features = false, features = [
     "png",
     "gif",
     "webp",
+    "tiff",
+    "hdr",
 ] }
 rayon = "1"
+tiff = "0.11"

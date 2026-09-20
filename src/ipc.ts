@@ -35,9 +35,12 @@ export function thumbUrl(e: Entry, w: number): string {
   return `${THUMB_BASE}?src=${encodeURIComponent(e.path)}&w=${w}&v=${e.mtime}`;
 }
 
-/** 查看器整帧：maxDim=0 全尺寸，>0 为降采样预览 */
-export function imageUrl(e: Entry, maxDim: number): string {
-  return `${IMAGE_BASE}?src=${encodeURIComponent(e.path)}&maxDim=${maxDim}&v=${e.mtime}`;
+/** 查看器整帧：maxDim=0 全尺寸，>0 为降采样预览；page 多页 TIFF 页码；e 曝光系数 */
+export function imageUrl(e: Entry, maxDim: number, page = 0, exposure = 1): string {
+  let q = `src=${encodeURIComponent(e.path)}&maxDim=${maxDim}&v=${e.mtime}`;
+  if (page > 0) q += `&page=${page}`;
+  if (exposure !== 1) q += `&e=${exposure}`;
+  return `${IMAGE_BASE}?${q}`;
 }
 
 export const ipc = {

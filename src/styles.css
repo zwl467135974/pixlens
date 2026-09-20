@@ -313,6 +313,37 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+#viewer-bar .vpages {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+#viewer-bar .vpages button {
+  font-size: 15px;
+  padding: 2px 8px;
+}
+
+#viewer-bar .vexp {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+#viewer-bar .vexp input {
+  width: 90px;
+  accent-color: var(--accent);
+}
+
+#viewer-bar .vexp span {
+  min-width: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── 滚动条 ─────────────────────────── */
 #grid::-webkit-scrollbar {
   width: 12px;

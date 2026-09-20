@@ -195,13 +195,6 @@ pub struct Composite {
     pub image: image::RgbaImage,
 }
 
-/// 深度 32：线性 → sRGB 基础曝光映射
-fn f32_to_u8(v: f32) -> u8 {
-    let v = v.clamp(0.0, 1.0);
-    let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
-    (s * 255.0 + 0.5) as u8
-}
-
 /// PackBits（RLE）解压，输出必须恰好填满 dst
 pub fn packbits_decode(src: &[u8], dst: &mut [u8]) -> Result<(), PsdError> {
     let mut si = 0usize;
@@ -239,7 +232,13 @@ pub fn packbits_decode(src: &[u8], dst: &mut [u8]) -> Result<(), PsdError> {
 /// 解码合成图。
 /// - `max_dim == 0`：全量解码（受 8 亿像素 / 1.5GB 缓冲护栏约束）
 /// - `max_dim > 0`：跨步行采样预览（只解码采样行，输出 ≤ max_dim 长边）
-pub fn decode_composite(data: &[u8], info: &PsdInfo, max_dim: u32) -> Result<Composite, PsdError> {
+/// - `exposure`：32 位 HDR 色调映射曝光系数（1.0 = 默认）
+pub fn decode_composite(
+    data: &[u8],
+    info: &PsdInfo,
+    max_dim: u32,
+    exposure: f32,
+) -> Result<Composite, PsdError> {
     // v1 仅支持灰度(1) / RGB(3)；CMYK/Lab/索引等显示占位
     let base = match info.mode {
         1 => 1usize,
@@ -346,7 +345,7 @@ pub fn decode_composite(data: &[u8], info: &PsdInfo, max_dim: u32) -> Result<Com
                         }
                     }
                 }
-                convert_row(&planes, info, base, has_alpha, w, ow, step, row_out);
+                convert_row(&planes, info, base, has_alpha, w, ow, step, exposure, row_out);
                 Ok::<(), PsdError>(())
             },
         );
@@ -366,6 +365,7 @@ fn convert_row(
     w: usize,
     ow: usize,
     step: usize,
+    exposure: f32,
     out_row: &mut [u8],
 ) {
     let bps = info.depth as usize / 8;
@@ -380,7 +380,7 @@ fn convert_row(
             }
             32 => {
                 let b = plane.get(o..o + 4).map(|s| [s[0], s[1], s[2], s[3]]).unwrap_or([0; 4]);
-                f32_to_u8(f32::from_be_bytes(b))
+                crate::codecs::tone_map(f32::from_be_bytes(b), exposure)
             }
             _ => 0,
         }
@@ -583,12 +583,12 @@ mod tests {
             match ch.depth {
                 8 => plane[o],
                 16 => plane[o],
-                32 => f32_to_u8(f32::from_be_bytes([
+                32 => crate::codecs::tone_map(f32::from_be_bytes([
                     plane[o],
                     plane[o + 1],
                     plane[o + 2],
                     plane[o + 3],
-                ])),
+                ]), 1.0),
                 _ => 0,
             }
         };
@@ -621,7 +621,7 @@ mod tests {
                         assert_eq!(info.width, 33);
                         assert_eq!(info.height, 17);
                         assert!(embedded_thumbnail(&data, &info).is_none());
-                        let c = decode_composite(&data, &info, 0).unwrap();
+                        let c = decode_composite(&data, &info, 0, 1.0).unwrap();
                         assert_eq!(c.image.dimensions(), (33, 17));
                         let expect = expected_rgba(&ch, true);
                         for (i, px) in c.image.pixels().enumerate() {
@@ -642,7 +642,7 @@ mod tests {
         let got = embedded_thumbnail(&data, &info).unwrap();
         assert_eq!(got, fake_jpeg);
         // 解码不受资源段影响
-        assert!(decode_composite(&data, &info, 0).is_ok());
+        assert!(decode_composite(&data, &info, 0, 1.0).is_ok());
     }
 
     #[test]
@@ -650,7 +650,7 @@ mod tests {
         let ch = deterministic(100, 60, 3, 8);
         let data = encode_psd(&ch, 2, 1, None);
         let info = parse(&data).unwrap();
-        let c = decode_composite(&data, &info, 25).unwrap();
+        let c = decode_composite(&data, &info, 25, 1.0).unwrap();
         let (pw, ph) = c.image.dimensions();
         assert!(pw <= 25 && ph <= 25, "{pw}×{ph}");
         assert_eq!((c.width, c.height), (100, 60));
@@ -687,7 +687,7 @@ mod tests {
         bad[tbl..tbl + 2].copy_from_slice(&0xffffu16.to_be_bytes());
         let info2 = parse(&bad).unwrap();
         assert!(matches!(
-            decode_composite(&bad, &info2, 0),
+            decode_composite(&bad, &info2, 0, 1.0),
             Err(PsdError::Truncated)
         ));
 
@@ -697,7 +697,7 @@ mod tests {
         bad[info.img_start..info.img_start + 2].copy_from_slice(&2u16.to_be_bytes());
         let info2 = parse(&bad).unwrap();
         assert!(matches!(
-            decode_composite(&bad, &info2, 0),
+            decode_composite(&bad, &info2, 0, 1.0),
             Err(PsdError::UnsupportedCompression(2))
         ));
 
@@ -706,7 +706,7 @@ mod tests {
         bad[24..26].copy_from_slice(&4u16.to_be_bytes());
         let info2 = parse(&bad).unwrap();
         assert!(matches!(
-            decode_composite(&bad, &info2, 0),
+            decode_composite(&bad, &info2, 0, 1.0),
             Err(PsdError::UnsupportedMode(4))
         ));
     }
@@ -721,12 +721,12 @@ mod tests {
         data[18..22].copy_from_slice(&30000u32.to_be_bytes());
         let info = parse(&data).unwrap();
         assert!(matches!(
-            decode_composite(&data, &info, 0),
+            decode_composite(&data, &info, 0, 1.0),
             Err(PsdError::TooLarge(_))
         ));
         // 伪造头部的文件没有对应行数据，预览会得到 Truncated（护栏生效，不 panic）
         assert!(matches!(
-            decode_composite(&data, &info, 256),
+            decode_composite(&data, &info, 256, 1.0),
             Err(PsdError::Truncated)
         ));
 
@@ -734,7 +734,7 @@ mod tests {
         let big = deterministic(2000, 1500, 3, 8);
         let data = encode_psd(&big, 2, 1, None);
         let info = parse(&data).unwrap();
-        let c = decode_composite(&data, &info, 100).unwrap();
+        let c = decode_composite(&data, &info, 100, 1.0).unwrap();
         assert!(c.image.width() <= 100 && c.image.height() <= 100);
     }
 

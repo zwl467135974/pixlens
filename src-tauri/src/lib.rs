@@ -128,9 +128,14 @@ pub fn run() {
                 let mut builder = tauri::http::Response::builder()
                     .header("Content-Type", out.mime.clone())
                     .header("Content-Length", out.bytes.len())
-                    .header("Access-Control-Allow-Origin", "*");
+                    .header("Access-Control-Allow-Origin", "*")
+                    // 自定义头必须显式暴露，跨域 fetch 才能读到
+                    .header("Access-Control-Expose-Headers", "X-PixLens-Natural, X-PixLens-Pages");
                 if let Some((w, h)) = out.natural {
                     builder = builder.header("X-PixLens-Natural", format!("{w}x{h}"));
+                }
+                if let Some(pages) = out.pages {
+                    builder = builder.header("X-PixLens-Pages", pages.to_string());
                 }
                 let resp = builder
                     .body(out.bytes)

@@ -1113,6 +1113,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "rayon",
+ "tiff",
 ]
 
 [[package]]
@@ -2492,6 +2493,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tiff",
  "walkdir",
 ]
 

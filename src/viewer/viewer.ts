@@ -25,7 +25,12 @@ interface Frame {
   nativeW: number;
   /** 是否已是最优源（透传格式预览=原始，无需升级） */
   isFull: boolean;
+  /** 多页文件总页数（TIFF，其他为 null） */
+  pages: number | null;
 }
+
+/** 曝光滑块对这些格式有意义（32 位内容 / HDR 载体） */
+const EXPOSURE_EXTS = new Set(["psd", "psb", "tif", "tiff", "hdr"]);
 
 export class Viewer {
   private root: HTMLElement;
@@ -34,14 +39,23 @@ export class Viewer {
   private gifLayer: HTMLImageElement;
   private infoPanel: HTMLElement;
   private zoomLabel: HTMLElement;
+  private pagesWrap: HTMLElement;
+  private pageLabel: HTMLElement;
+  private expWrap: HTMLElement;
+  private expSlider: HTMLInputElement;
+  private expVal: HTMLElement;
 
   private getEntries: () => Entry[];
   private idx = -1;
   private cur: Entry | null = null;
-  /** 预览 LRU（按插入序淘汰） */
+  /** 预览 LRU（按插入序淘汰，键含页码/曝光变体） */
   private lru = new Map<string, Frame>();
   private fullFrame: Frame | null = null;
   private fullToken = 0;
+  /** 多页 TIFF 当前页（0 基） */
+  page = 0;
+  /** HDR 曝光系数（滑块 stops = log2） */
+  exposure = 1;
 
   scale = 1;
   rot = 0;
@@ -73,6 +87,12 @@ export class Viewer {
         <button data-act="prev" title="上一张（←）">◀</button>
         <button data-act="next" title="下一张（→）">▶</button>
         <span class="vsep"></span>
+        <span id="viewer-pages" class="vpages hidden">
+          <button data-act="pgprev" title="上一页（PgUp）">‹</button>
+          <span id="viewer-page-label">1/1</span>
+          <button data-act="pgnext" title="下一页（PgDn）">›</button>
+        </span>
+        <span class="vsep"></span>
         <button data-act="rotl" title="左旋 90°（L）">⟲</button>
         <button data-act="rotr" title="右旋 90°（R）">⟳</button>
         <button data-act="fliph" title="水平翻转">⇋</button>
@@ -80,6 +100,11 @@ export class Viewer {
         <span class="vsep"></span>
         <button data-act="fit" title="适应窗口（0）">适应</button>
         <button data-act="100" title="100%（1）">100%</button>
+        <span class="vsep"></span>
+        <label id="viewer-exposure" class="vexp hidden" title="HDR 曝光">EV
+          <input id="exposure-slider" type="range" min="-2" max="2" step="0.1" value="0" />
+          <span id="exposure-val">0</span>
+        </label>
         <span class="vsep"></span>
         <button data-act="fs" title="全屏（F）">全屏</button>
         <button data-act="slideshow" title="幻灯片（空格）">▶ 幻灯片</button>
@@ -100,6 +125,11 @@ export class Viewer {
     this.gifLayer = root.querySelector("#viewer-gif") as HTMLImageElement;
     this.infoPanel = root.querySelector("#viewer-info") as HTMLElement;
     this.zoomLabel = root.querySelector("#viewer-zoom") as HTMLElement;
+    this.pagesWrap = root.querySelector("#viewer-pages") as HTMLElement;
+    this.pageLabel = root.querySelector("#viewer-page-label") as HTMLElement;
+    this.expWrap = root.querySelector("#viewer-exposure") as HTMLElement;
+    this.expSlider = root.querySelector("#exposure-slider") as HTMLInputElement;
+    this.expVal = root.querySelector("#exposure-val") as HTMLElement;
 
     this.bindInput();
     (root.querySelector("#viewer-bar") as HTMLElement).addEventListener("click", (ev) => {
@@ -109,6 +139,13 @@ export class Viewer {
     const sel = root.querySelector("#slideshow-interval") as HTMLSelectElement;
     sel.addEventListener("change", () => {
       this.slideshowMs = Number(sel.value);
+    });
+    // 曝光滑块：防抖 150ms 后重解码（预览+全尺寸）
+    let expTimer = 0;
+    this.expSlider.addEventListener("input", () => {
+      this.expVal.textContent = this.expSlider.value;
+      window.clearTimeout(expTimer);
+      expTimer = window.setTimeout(() => this.setExposure(Number(this.expSlider.value)), 150);
     });
   }
 
@@ -175,29 +212,41 @@ export class Viewer {
     this.rot = 0;
     this.flipH = false;
     this.flipV = false;
+    this.page = 0; // 换文件重置到第一页
     this.gifLayer.classList.add("hidden");
+    this.updateVariantUi();
 
-    await this.getPreview(entry);
+    await this.getPreview(entry, this.page, this.exposure);
     if (token !== this.fullToken || this.cur?.path !== entry.path) return;
     this.fit();
     this.draw();
+    this.updateVariantUi();
     this.prefetch(i);
     void this.loadFull(entry, token);
   }
 
-  private async getPreview(entry: Entry): Promise<Frame> {
-    const hit = this.lru.get(entry.path);
+  /** LRU 键：路径 + 页码/曝光变体（仅相关格式带变体后缀） */
+  private vkey(e: Entry, page: number, exposure: number): string {
+    let k = e.path;
+    if (e.ext === "tif" || e.ext === "tiff") k += `#p${page}`;
+    if (EXPOSURE_EXTS.has(e.ext)) k += `#e${Math.round(exposure * 100)}`;
+    return k;
+  }
+
+  private async getPreview(entry: Entry, page: number, exposure: number): Promise<Frame> {
+    const key = this.vkey(entry, page, exposure);
+    const hit = this.lru.get(key);
     if (hit) {
       // LRU 置新
-      this.lru.delete(entry.path);
-      this.lru.set(entry.path, hit);
+      this.lru.delete(key);
+      this.lru.set(key, hit);
       return hit;
     }
-    const frame = await loadFrame(entry, PREVIEW_MAX_DIM);
-    this.lru.set(entry.path, frame);
+    const frame = await loadFrame(entry, PREVIEW_MAX_DIM, page, exposure);
+    this.lru.set(key, frame);
     while (this.lru.size > LRU_CAPACITY) {
       const oldest = this.lru.keys().next().value as string;
-      if (oldest === entry.path) break;
+      if (oldest === key) break;
       this.lru.delete(oldest);
     }
     return frame;
@@ -207,25 +256,87 @@ export class Viewer {
     const entries = this.getEntries();
     for (const d of [-2, -1, 1, 2]) {
       const e = entries[i + d];
-      if (e && !this.lru.has(e.path)) {
-        void this.getPreview(e).catch(() => {});
+      if (e && !this.lru.has(this.vkey(e, 0, 1))) {
+        void this.getPreview(e, 0, 1).catch(() => {});
       }
     }
   }
 
   /** LOD 升级：全尺寸替换（透传格式浏览器原生解码） */
   private async loadFull(entry: Entry, token: number): Promise<void> {
-    const cur = await this.getPreview(entry); // 确保已在 LRU
+    const cur = await this.getPreview(entry, this.page, this.exposure); // 确保已在 LRU
     if (cur.isFull) return; // 透传格式预览即全尺寸
-    const frame = await loadFrame(entry, 0);
+    const frame = await loadFrame(entry, 0, this.page, this.exposure);
     if (token !== this.fullToken || this.cur?.path !== entry.path) return;
     this.fullFrame = frame;
     this.draw();
+    this.updateVariantUi();
     this.onFullLoaded(entry);
   }
 
   private effective(): Frame | null {
-    return this.fullFrame ?? (this.cur ? this.lru.get(this.cur.path) ?? null : null);
+    if (!this.cur) return null;
+    return (
+      this.fullFrame ?? this.lru.get(this.vkey(this.cur, this.page, this.exposure)) ?? null
+    );
+  }
+
+  /** 多页 TIFF 翻页（dir=±1）；页码越界由 Rust 返回错误 → 占位 */
+  setPage(dir: 1 | -1): void {
+    if (!this.open_ || !this.cur) return;
+    const target = this.page + dir;
+    if (target < 0) return;
+    const curPages = this.effective()?.pages ?? 1;
+    if (target >= curPages) return;
+    this.page = target;
+    this.fullFrame = null;
+    const token = ++this.fullToken;
+    const entry = this.cur;
+    void (async () => {
+      await this.getPreview(entry, this.page, this.exposure);
+      if (token !== this.fullToken || this.cur?.path !== entry.path) return;
+      this.draw();
+      this.updateVariantUi();
+      void this.loadFull(entry, token);
+      // 预取下一页（多页翻页流畅性）
+      const pages = this.effective()?.pages ?? 0;
+      if (pages > this.page + 1) {
+        void this.getPreview(entry, this.page + 1, this.exposure).catch(() => {});
+      }
+    })();
+  }
+
+  /** HDR 曝光（stops，滑块） */
+  setExposure(stops: number): void {
+    if (!this.open_ || !this.cur) return;
+    this.exposure = Math.pow(2, stops);
+    this.fullFrame = null;
+    const token = ++this.fullToken;
+    const entry = this.cur;
+    void (async () => {
+      await this.getPreview(entry, this.page, this.exposure);
+      if (token !== this.fullToken || this.cur?.path !== entry.path) return;
+      this.draw();
+      void this.loadFull(entry, token);
+    })();
+  }
+
+  /** 页码/曝光控件可见性与数值刷新 */
+  private updateVariantUi(): void {
+    const f = this.effective();
+    const pages = f?.pages ?? (this.cur && (this.cur.ext === "tif" || this.cur.ext === "tiff") ? 1 : 0);
+    if (pages > 1) {
+      this.pagesWrap.classList.remove("hidden");
+      this.pageLabel.textContent = `${this.page + 1}/${pages}`;
+    } else {
+      this.pagesWrap.classList.add("hidden");
+    }
+    if (this.cur && EXPOSURE_EXTS.has(this.cur.ext)) {
+      this.expWrap.classList.remove("hidden");
+      this.expVal.textContent = `${Math.round(Math.log2(this.exposure) * 10) / 10}`;
+    } else {
+      this.expWrap.classList.add("hidden");
+    }
   }
 
   // ── 变换 ─────────────────────────────
@@ -331,9 +442,10 @@ export class Viewer {
 
   private renderInfo(e: Entry, f: Frame): void {
     this.infoPanel.classList.remove("hidden");
+    const pageInfo = f.pages && f.pages > 1 ? ` · 第 ${this.page + 1}/${f.pages} 页` : "";
     this.infoPanel.innerHTML = `
       <div class="row name">${e.name}</div>
-      <div class="row">${f.naturalW} × ${f.naturalH} px · ${e.ext.toUpperCase()}</div>
+      <div class="row">${f.naturalW} × ${f.naturalH} px · ${e.ext.toUpperCase()}${pageInfo}</div>
       <div class="row">${fmtSize(e.size)} · 缩放 ${Math.round(this.scale * 100)}%</div>
       <div class="row dim">${e.path}</div>`;
   }
@@ -404,6 +516,12 @@ export class Viewer {
       } else if (k === " ") {
         ev.preventDefault();
         this.toggleSlideshow();
+      } else if (k === "PageUp") {
+        ev.preventDefault();
+        this.setPage(-1);
+      } else if (k === "PageDown") {
+        ev.preventDefault();
+        this.setPage(1);
       } else if (k === "i" || k === "I") {
         this.infoVisible = !this.infoVisible;
         if (!this.infoVisible) this.infoPanel.classList.add("hidden");
@@ -418,6 +536,8 @@ export class Viewer {
     switch (act) {
       case "prev": this.next(-1); break;
       case "next": this.next(1); break;
+      case "pgprev": this.setPage(-1); break;
+      case "pgnext": this.setPage(1); break;
       case "rotl": this.rotate(-90); break;
       case "rotr": this.rotate(90); break;
       case "fliph": this.flip("h"); break;
@@ -522,8 +642,8 @@ export class Viewer {
 /** 同一 URL 的并发请求共享同一 Promise（避免 show 与 loadFull 重复 fetch） */
 const inflight = new Map<string, Promise<Frame>>();
 
-function loadFrame(entry: Entry, maxDim: number): Promise<Frame> {
-  const url = imageUrl(entry, maxDim);
+function loadFrame(entry: Entry, maxDim: number, page: number, exposure: number): Promise<Frame> {
+  const url = imageUrl(entry, maxDim, page, exposure);
   const existing = inflight.get(url);
   if (existing) return existing;
   const p = doLoadFrame(entry, maxDim, url).finally(() => inflight.delete(url));
@@ -550,6 +670,8 @@ async function doLoadFrame(entry: Entry, maxDim: number, url: string): Promise<F
     const [w, h] = naturalHeader.split("x").map(Number);
     if (w > 0 && h > 0) natural = { w, h };
   }
+  const pagesHeader = Number(resp.headers.get("X-PixLens-Pages") ?? "0");
+  const pages = pagesHeader > 0 ? pagesHeader : null;
 
   const animated = entry.ext === "gif";
   const domOnly = animated || mime === "image/svg+xml";
@@ -564,6 +686,7 @@ async function doLoadFrame(entry: Entry, maxDim: number, url: string): Promise<F
       naturalH: nh,
       nativeW: img.naturalWidth,
       isFull: maxDim === 0 || img.naturalWidth >= nw,
+      pages,
     };
   }
   const bmp = await createImageBitmap(blob);
@@ -575,6 +698,7 @@ async function doLoadFrame(entry: Entry, maxDim: number, url: string): Promise<F
     naturalH: nh,
     nativeW: bmp.width,
     isFull: maxDim === 0 || bmp.width >= nw,
+    pages,
   };
 }
 

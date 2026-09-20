@@ -25,6 +25,7 @@ image = { version = "0.25", default-features = false, features = [
     "bmp",
     "ico",
     "tiff",
+    "hdr",
 ] }
 walkdir = "2"
 notify = "8"
@@ -34,3 +35,5 @@ num_cpus = "1"
 percent-encoding = "2"
 memmap2 = "0.5"
 rayon = "1"
+# 多页 TIFF：image crate 只解首帧，按 02 文档预案直接用 tiff crate（接口已隔离）
+tiff = "0.11"

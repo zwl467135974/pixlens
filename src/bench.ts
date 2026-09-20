@@ -111,6 +111,47 @@ async function viewerBench(
     log(`P8_preview_${tag}_ms`, performance.now() - t0);
   }
 
+  // M4a：多页 TIFF 页间切换（X-PixLens-Pages 检出多页后测 1..3 页延迟）
+  for (const e of entries.filter((x) => x.ext === "tif" || x.ext === "tiff")) {
+    const tag = e.name.replace(/[^A-Za-z0-9_\u4e00-\u9fa5]+/g, "_");
+    const r0 = await fetch(imageUrl(e, 2560, 0, 1));
+    const pgs = Number(r0.headers.get("X-PixLens-Pages") ?? "1");
+    await r0.arrayBuffer();
+    if (pgs > 1) {
+      const lat: number[] = [];
+      for (let p = 1; p < Math.min(pgs, 4); p++) {
+        const t = performance.now();
+        const r = await fetch(imageUrl(e, 2560, p, 1));
+        await r.arrayBuffer();
+        lat.push(performance.now() - t);
+      }
+      log(`M4_tiff_pages_${tag}`, pgs);
+      log("M4_tiff_page_switch_avg_ms", avg(lat));
+      log("M4_tiff_page_switch_max_ms", lat.length ? Math.max(...lat) : 0);
+      // 热缓存二次切换（磁盘缓存命中路径）
+      const tw = performance.now();
+      const rw = await fetch(imageUrl(e, 2560, 1, 1));
+      await rw.arrayBuffer();
+      log("M4_tiff_page_switch_warm_ms", performance.now() - tw);
+      break; // 测第一个多页文件即可
+    }
+  }
+
+  // M4b：HDR 曝光可调（预览 + 换曝光重解码，字节应有差异）
+  for (const e of entries.filter((x) => x.ext === "hdr")) {
+    const tag = e.name.replace(/[^A-Za-z0-9_\u4e00-\u9fa5]+/g, "_");
+    let t = performance.now();
+    const r1 = await fetch(imageUrl(e, 2560, 0, 1));
+    const b1 = await r1.arrayBuffer();
+    log(`M4_hdr_preview_${tag}_ms`, performance.now() - t);
+    t = performance.now();
+    const r2 = await fetch(imageUrl(e, 2560, 0, 4));
+    const b2 = await r2.arrayBuffer();
+    log("M4_hdr_exposure_change_ms", performance.now() - t);
+    log(`M4_hdr_exposure_differs_${tag}`, b1.byteLength !== b2.byteLength ? 1 : 0);
+    break;
+  }
+
   // P7：图库中存在大图（>5MB）时，100% 缩放平移 8s
   const big = entries.reduce((a, b) => (b.size > a.size ? b : a));
   if (big.size > 5 * 1024 * 1024) {
