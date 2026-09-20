@@ -83,6 +83,8 @@ export const ipc = {
   batchConvert: (paths: string[], opts: ConvertOptions) =>
     invoke<number>("batch_convert", { paths, opts }),
   batchCancel: (jobId: number) => invoke<boolean>("batch_cancel", { jobId }),
+  editApply: (src: string, ops: unknown, overwrite: boolean, quality: number) =>
+    invoke<string>("edit_apply", { src, ops, overwrite, quality }),
 };
 
 export function fmtSize(n: number): string {

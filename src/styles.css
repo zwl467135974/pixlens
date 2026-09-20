@@ -531,6 +531,110 @@ body {
   color: var(--fg-dim);
 }
 
+/* ── 编辑面板与裁剪 ───────────────────── */
+#editor-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  z-index: 60;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  overflow-y: auto;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
+}
+
+#editor-panel.hidden {
+  display: none;
+}
+
+.ep-note {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.ep-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.ep-title {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.ep-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.ep-row .btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.ep-row .btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.ep-slider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.ep-slider input {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.ep-slider span {
+  min-width: 28px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ep-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.ep-dim {
+  font-size: 11px;
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+
+#viewer-crop-rect {
+  position: absolute;
+  border: 2px dashed #fff;
+  box-shadow: 0 0 0 100000px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 5;
+}
+
+#viewer-crop-rect.hidden {
+  display: none;
+}
+
 /* ── 滚动条 ─────────────────────────── */
 #grid::-webkit-scrollbar {
   width: 12px;

@@ -1,4 +1,5 @@
 pub mod codecs;
+mod edit;
 mod batch;
 mod scan;
 mod thumb;
@@ -155,6 +156,7 @@ pub fn run() {
             batch::batch_rename_apply,
             batch::batch_convert,
             batch::batch_cancel,
+            edit::edit_apply,
             get_bench_config,
             bench_clear_cache,
             bench_done,

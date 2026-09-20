@@ -170,6 +170,22 @@ async function viewerBench(
 
   // M5：批量转换（全量可转文件）——吞吐 + UI 帧率 + 进度准确 + 取消
   await batchBench(folder, entries, log);
+
+  // M6：编辑落盘（另存副本，原图保留由单元测试保证字节不变）
+  const m6 = entries.find((e) => e.ext === "jpg");
+  if (m6) {
+    try {
+      const out = await ipc.editApply(
+        m6.path,
+        { crop: null, rotate: 90, flipH: true, flipV: false, brightness: 15, contrast: 10, saturation: -20, filter: "sepia" },
+        false,
+        90,
+      );
+      log("M6_edit_saved", out ? 1 : 0);
+    } catch {
+      log("M6_edit_failed", 1);
+    }
+  }
 }
 
 /** M5 验收：1 万张批量转换无卡死、可取消、进度准确 */

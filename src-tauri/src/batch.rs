@@ -305,7 +305,7 @@ fn encode_output(img: image::DynamicImage, opts: &ConvertOptions) -> Result<Vec<
 }
 
 /// 新文件冲突避让：name.ext → name (1).ext …
-fn unique_path(mut p: PathBuf) -> PathBuf {
+pub(crate) fn unique_path(mut p: PathBuf) -> PathBuf {
     if !p.exists() {
         return p;
     }

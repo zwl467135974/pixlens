@@ -44,6 +44,12 @@ export class Viewer {
   private expWrap: HTMLElement;
   private expSlider: HTMLInputElement;
   private expVal: HTMLElement;
+  private cropRectEl: HTMLElement;
+  /** 裁剪框选模式（编辑器用） */
+  private cropMode = false;
+  private cropAnchor: { x: number; y: number } | null = null;
+  private cropCb: ((rect: { x1: number; y1: number; x2: number; y2: number }) => void) | null = null;
+  private cropDragging = false;
 
   private getEntries: () => Entry[];
   private idx = -1;
@@ -73,6 +79,8 @@ export class Viewer {
   onDrawn: (e: Entry) => void = () => {};
   /** 全尺寸帧就绪回调（bench 埋点） */
   onFullLoaded: (e: Entry) => void = () => {};
+  /** 编辑请求回调（工具栏"编辑"按钮 / E 键） */
+  onEditRequest: () => void = () => {};
 
   constructor(container: HTMLElement, getEntries: () => Entry[]) {
     this.getEntries = getEntries;
@@ -115,9 +123,11 @@ export class Viewer {
         </select>
         <span class="vsep"></span>
         <button data-act="info" title="图片信息（I）">ℹ</button>
+        <button data-act="edit" title="编辑（E）">✎ 编辑</button>
         <button data-act="close" title="关闭（Esc）">✕</button>
         <span id="viewer-zoom" class="zoom"></span>
-      </div>`;
+      </div>
+      <div id="viewer-crop-rect" class="hidden"></div>`;
     container.appendChild(root);
     this.root = root;
     this.canvas = root.querySelector("#viewer-canvas") as HTMLCanvasElement;
@@ -130,6 +140,7 @@ export class Viewer {
     this.expWrap = root.querySelector("#viewer-exposure") as HTMLElement;
     this.expSlider = root.querySelector("#exposure-slider") as HTMLInputElement;
     this.expVal = root.querySelector("#exposure-val") as HTMLElement;
+    this.cropRectEl = root.querySelector("#viewer-crop-rect") as HTMLElement;
 
     this.bindInput();
     (root.querySelector("#viewer-bar") as HTMLElement).addEventListener("click", (ev) => {
@@ -151,6 +162,52 @@ export class Viewer {
 
   get isOpen(): boolean {
     return this.open_;
+  }
+
+  /** 当前条目（编辑器保存用） */
+  currentEntry(): Entry | null {
+    return this.cur;
+  }
+
+  /** 屏幕坐标 → 原图像素坐标（逆变换：off → 缩放 → 反旋转，绕图像中心） */
+  screenToImage(cx: number, cy: number): { x: number; y: number } | null {
+    const f = this.effective();
+    if (!f) return null;
+    const s = this.scale;
+    const sx = this.flipH ? -s : s;
+    const sy = this.flipV ? -s : s;
+    const rot = (-this.rot * Math.PI) / 180;
+    const dx = (cx - this.offX) / sx;
+    const dy = (cy - this.offY) / sy;
+    const cos = Math.cos(rot);
+    const sin = Math.sin(rot);
+    return {
+      x: dx * cos - dy * sin + f.naturalW / 2,
+      y: dx * sin + dy * cos + f.naturalH / 2,
+    };
+  }
+
+  /** 编辑预览：CSS filter（与 Rust 应用公式一致） */
+  setPreviewFilter(css: string): void {
+    const v = css === "none" ? "" : css;
+    this.canvas.style.filter = v;
+    this.gifLayer.style.filter = v;
+  }
+
+  /** 进入裁剪框选模式：拖拽出矩形后回调（屏幕坐标） */
+  enterCropMode(cb: (rect: { x1: number; y1: number; x2: number; y2: number }) => void): void {
+    this.cropMode = true;
+    this.cropCb = cb;
+    this.canvas.style.cursor = "crosshair";
+    this.cropRectEl.classList.add("hidden");
+  }
+
+  exitCropMode(): void {
+    this.cropMode = false;
+    this.cropCb = null;
+    this.cropAnchor = null;
+    this.canvas.style.cursor = "grab";
+    this.cropRectEl.classList.add("hidden");
   }
 
   open(path: string): void {
@@ -397,7 +454,8 @@ export class Viewer {
     this.canvas.style.height = `${h}px`;
   }
 
-  private draw(): void {
+  /** 重绘（编辑器同步视图用） */
+  draw(): void {
     const entry = this.cur;
     const f = this.effective();
     const dpr = window.devicePixelRatio || 1;
@@ -462,17 +520,57 @@ export class Viewer {
     let lastX = 0;
     let lastY = 0;
     this.root.addEventListener("mousedown", (ev) => {
+      if (this.cropMode) {
+        // 裁剪框选（相对视口的画布坐标）
+        const rect = this.canvas.getBoundingClientRect();
+        this.cropAnchor = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+        this.cropDragging = true;
+        this.updateCropOverlay(this.cropAnchor, this.cropAnchor);
+        this.cropRectEl.classList.remove("hidden");
+        return;
+      }
       dragging = true;
       lastX = ev.clientX;
       lastY = ev.clientY;
     });
     window.addEventListener("mousemove", (ev) => {
+      if (this.cropDragging && this.cropAnchor) {
+        const rect = this.canvas.getBoundingClientRect();
+        const cur = {
+          x: Math.max(0, Math.min(rect.width, ev.clientX - rect.left)),
+          y: Math.max(0, Math.min(rect.height, ev.clientY - rect.top)),
+        };
+        this.updateCropOverlay(this.cropAnchor, cur);
+        return;
+      }
       if (!dragging || !this.open_) return;
       this.panBy(ev.clientX - lastX, ev.clientY - lastY);
       lastX = ev.clientX;
       lastY = ev.clientY;
     });
-    window.addEventListener("mouseup", () => {
+    window.addEventListener("mouseup", (ev) => {
+      if (this.cropDragging && this.cropAnchor) {
+        this.cropDragging = false;
+        const rect = this.canvas.getBoundingClientRect();
+        const cur = {
+          x: Math.max(0, Math.min(rect.width, ev.clientX - rect.left)),
+          y: Math.max(0, Math.min(rect.height, ev.clientY - rect.top)),
+        };
+        const a = this.cropAnchor;
+        this.cropAnchor = null;
+        // 太小的框视为误触
+        if (Math.abs(cur.x - a.x) > 8 && Math.abs(cur.y - a.y) > 8 && this.cropCb) {
+          this.cropCb({
+            x1: Math.min(a.x, cur.x),
+            y1: Math.min(a.y, cur.y),
+            x2: Math.max(a.x, cur.x),
+            y2: Math.max(a.y, cur.y),
+          });
+        } else {
+          this.cropRectEl.classList.add("hidden");
+        }
+        return;
+      }
       dragging = false;
     });
 
@@ -526,10 +624,29 @@ export class Viewer {
         this.infoVisible = !this.infoVisible;
         if (!this.infoVisible) this.infoPanel.classList.add("hidden");
         this.draw();
+      } else if (k === "e" || k === "E") {
+        this.onEditRequest();
       } else if (k === "Escape") {
-        this.close();
+        if (this.cropMode) {
+          this.exitCropMode();
+        } else {
+          this.close();
+        }
       }
     });
+  }
+
+  /** 裁剪框选覆盖层 */
+  private updateCropOverlay(a: { x: number; y: number }, b: { x: number; y: number }): void {
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    const w = Math.abs(b.x - a.x);
+    const h = Math.abs(b.y - a.y);
+    const el = this.cropRectEl;
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.width = `${w}px`;
+    el.style.height = `${h}px`;
   }
 
   private async action(act: string): Promise<void> {
@@ -551,6 +668,7 @@ export class Viewer {
         if (!this.infoVisible) this.infoPanel.classList.add("hidden");
         this.draw();
         break;
+      case "edit": this.onEditRequest(); break;
       case "close": this.close(); break;
     }
   }

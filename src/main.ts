@@ -6,11 +6,14 @@ import { AppState, type SortDir, type SortKey } from "./state";
 import { Grid } from "./grid/grid";
 import { Viewer } from "./viewer/viewer";
 import { BatchPanel } from "./batch/panel";
+import { EditorPanel } from "./editor/panel";
 import { runBench } from "./bench";
 
 const state = new AppState();
 const grid = new Grid(document.getElementById("grid") as HTMLElement);
 const viewer = new Viewer(document.getElementById("app") as HTMLElement, () => state.view);
+const editorPanel = new EditorPanel(document.getElementById("app") as HTMLElement, viewer);
+viewer.onEditRequest = () => editorPanel.open();
 
 /** 多选状态（Ctrl/Shift/拖选；双击进查看器） */
 const selected = new Set<string>();
