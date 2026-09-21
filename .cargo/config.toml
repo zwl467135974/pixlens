@@ -1,0 +1,3 @@
+# 静态链接 MSVC CRT：分发机器无需安装 VC++ 运行库
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

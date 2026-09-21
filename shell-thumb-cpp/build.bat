@@ -3,7 +3,7 @@ rem Build PixLens PSD/PSB shell thumbnail extension (C++ shell + Rust core)
 cd /d "%~dp0.."
 call "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
 
-cl /nologo /LD /EHsc /O2 /W3 /utf-8 /Zi /DUNICODE /D_UNICODE ^
+cl /nologo /LD /EHsc /O2 /W3 /utf-8 /Zi /MT /DUNICODE /D_UNICODE ^
    shell-thumb-cpp\thumb.cpp ^
    /Fe:target\release\pixlens_thumb_cpp.dll ^
    /Fo:target\release\pixlens_thumb_cpp.obj ^
