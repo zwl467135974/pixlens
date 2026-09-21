@@ -1,59 +1,130 @@
+<div align="center">
+
 # PixLens · 图镜
 
-> 免费、无广告、纯本地的 Windows 桌面看图软件 —— 轻快如镜，纤毫毕现。
+**免费 · 无广告 · 纯本地的 Windows 看图软件**
 
-- **定位**：对标收费/广告泛滥的看图工具，做免费、轻快、功能实在的看图软件
-- **特色**：万张图库流畅浏览、超大图不卡、原生支持 **PSD / PSB** 设计源文件
-- **平台**：Windows 10 / 11 x64
-- **技术栈**：Tauri 2（Rust 核心 + WebView2 前端，TypeScript + Vite）
+*轻快如镜，纤毫毕现*
 
-## 当前状态
+免费无广 ✦ PSD/PSB 原生支持 ✦ 资源管理器缩略图预览 ✦ 万张图库流畅浏览
 
-**v1.1 完成（2026-09-21）**：M1~M7 全部里程碑 + 用户实测反馈修复（查看器默认 100% 原始大小、编辑面板遮挡/全屏可见/预览生效修复）+ **PSD/PSB 资源管理器缩略图预览**（C++ COM 壳 + Rust 解码核心 cdylib 双 DLL 架构，安装即生效）。详见 `doc/验收记录.md`。
+</div>
 
-## 构建与发布
+---
 
-```bash
-pnpm install                 # 前端依赖
-pnpm tauri dev               # 开发运行
-cargo build -p psd-capi --release        # Rust 解码 cdylib（Shell 扩展核心）
-cmd /c shell-thumb-cpp\build.bat         # C++ 缩略图 COM DLL（依赖上面的 psd_capi.dll）
-cp target/release/psd_capi.dll target/release/pixlens_psd.dll
-pnpm tauri build             # 产出 NSIS 安装器 target/release/bundle/nsis/（含缩略图扩展）
-cargo test -p pixlens -p psd-codec        # 单元测试
-```
+## ✨ 为什么选择 PixLens
 
-验收基准：`PIXLENS_BENCH=<图库> [PIXLENS_BENCH_CLEAR=1] [PIXLENS_BENCH_FULL=1] pixlens.exe`，
-测试图库由 `tests/gen-lib`（LIB-S/M/XL/TIFF）与 `tests/gen-psd`（LIB-PSB，含 2GB PSB）生成。
+### 1. 设计师友好：原生 PSD / PSB 支持
 
-## 文档索引
+不用启动 Photoshop，双击就能看设计稿。市面上的免费看图软件几乎都不支持 PSD——我们**自研了完整的 PSD/PSB 解析引擎**（Rust 实现，支持 RLE/Raw 压缩、8/16/32 位深度、RGB/灰度），还能：
+
+- 🖼️ **资源管理器里直接显示 PSD/PSB 缩略图**（安装即生效，不装 Photoshop 也有预览）
+- ⚡ 2GB 的 PSB 大文件，内嵌缩略图 23ms 出图，合成预览 <100ms
+- 内嵌缩略图快路径 + 合成图跨步解码双引擎
+
+### 2. 极致性能（全部实测，非口号）
+
+| 指标 | 实测结果 |
+|---|---|
+| 冷启动 | **215 ms** |
+| 万张文件夹扫描 | **148 ms** |
+| 万张缩略图墙滚动 | **60 fps 满帧** |
+| 50MP 超大图 100% 平移 | **60 fps 满帧** |
+| 翻页响应（已预取） | **0.9 ms** |
+| 二次打开文件夹出图 | **19 ms** |
+| 2GB PSB 内嵌缩略图 | **23 ms** |
+| 安装包体积 | **2.7 MB** |
+
+### 3. 真正的免费与干净
+
+- **无广告、无内购、无功能阉割**——不搞"专业版"套路
+- **纯本地运行**：不联网、无遥测、无账号，你的图片不出你的电脑
+- 卸载不留垃圾（缓存随卸载清理）
+
+### 4. 小身材，全功能
+
+安装包只有 2.7MB（同类 Electron 方案 100MB+），但该有的都有：
+
+## 🖼️ 功能一览
+
+**浏览**
+- 虚拟滚动缩略图墙——单文件夹上万张流畅滚动
+- 排序（文件名自然序/修改时间/大小/类型）、即时搜索、缩略图尺寸滑块
+- 文件夹变更实时刷新（增删改自动同步）
+
+**大图查看器**
+- 默认按原始大小（100%）显示，滚轮以光标为中心平滑缩放、拖拽平移
+- 旋转/翻转、全屏幻灯片（2/5/10 秒）、GIF 动图播放
+- LOD 分级加载：预览先行，放大到 100% 无损替换
+- 多页 TIFF 翻页（PgUp/PgDn）；32 位 HDR 曝光滑块（EV）
+- 完整键盘快捷键 + 丝滑动效（开合过渡、翻页淡入）
+
+**批量处理**
+- 重命名：`{原名} {序号:n} {日期}` 模板，实时预览、冲突检测、交叉改名安全执行
+- 格式转换（JPG/PNG/WebP）、压缩、缩放（最长边/百分比）
+- Ctrl/Shift 多选、进度条、随时取消——万张转换 34.5s，UI 全程不卡
+
+**基础编辑**（所见即所得）
+- 裁剪（画布框选）、旋转/翻转保存
+- 亮度/对比度/饱和度实时预览（预览 = 成品，同一套算法）
+- 灰度/复古/反色滤镜；默认另存副本，原图零风险
+
+**格式支持**：JPG · PNG · GIF(动图) · WebP · BMP · ICO · AVIF · SVG · TIFF(多页) · HDR(32位) · **PSD · PSB**（RAW 在路线图）
+
+## 📦 安装
+
+1. 下载 `PixLens_x64-setup.exe`（2.7MB），双击安装（当前用户级，无需管理员）
+2. **系统要求**：Windows 10/11 x64（WebView2 一般系统自带）
+3. 首次运行如遇 SmartScreen 提示"已保护你的电脑"：点**更多信息 → 仍要运行**（个人开发者未购买代码签名证书）
+
+> PSD/PSB 缩略图预览安装后即生效；.jpg 等常见格式如需设为默认，请在"打开方式 → 选择其他应用 → 始终"中选 PixLens（Windows 对常见格式的默认程序有防篡改保护，任何软件都需要用户手动确认一次）。
+
+## 🏗️ 技术架构（开发者向）
+
+Tauri 2（Rust 核心 + WebView2 界面，TypeScript 无框架前端），几处值得一提的设计：
+
+- **自研 PSD/PSB 解析器**（`crates/psd-codec`）：PSD/PSB 统一处理、mmap 零拷贝 + rayon 行级并行、**跨步行采样**让 2GB 文件只解 1/144 的数据就出预览、损坏文件全程护栏不崩溃
+- **Explorer 缩略图扩展**：C++ COM 壳 + Rust 解码核心（独立 cdylib）+ 系统 GDI+，三层各司其职——这条路踩过的坑全部记录在 `doc/06-经验沉淀.md`
+- **数据通道设计**：像素字节走自定义协议（`thumb://` / `image://`），JSON IPC 只走小控制消息；Canvas 位图渲染 + 定容 LRU 保证万张滚动内存有界
+- **性能即验收**：12 项性能指标全部有自动化基准（`PIXLENS_BENCH` 验收模式），每次改动跑回归，指标即文档
+
+## 📚 文档
 
 | 文档 | 内容 |
 |---|---|
 | [doc/01-需求定义.md](doc/01-需求定义.md) | 定位与原则、功能清单、格式支持矩阵、决策记录 |
-| [doc/02-技术选型.md](doc/02-技术选型.md) | 三方案对比、Tauri 决定与理由、依赖清单、**开工前置检查清单** |
-| [doc/03-架构设计.md](doc/03-架构设计.md) | 分层架构、模块设计、**PSD/PSB 解析器详设**、协议与缓存设计 |
-| [doc/04-性能要求.md](doc/04-性能要求.md) | 性能指标验收表（含测量方法）、基准测试方案 |
-| [doc/05-里程碑计划.md](doc/05-里程碑计划.md) | M1~M7 分期计划、每期交付物与验收标准 |
-| [doc/06-经验沉淀.md](doc/06-经验沉淀.md) | **踩坑与解法实录**（Shell 扩展/Rust×C++/分发/环境互操作/调试方法论） |
-| [doc/验收记录.md](doc/验收记录.md) | 各里程碑与 v1.1 的实测验收数据 |
+| [doc/02-技术选型.md](doc/02-技术选型.md) | 三方案对比、Tauri 决定与理由、依赖清单 |
+| [doc/03-架构设计.md](doc/03-架构设计.md) | 分层架构、模块设计、PSD/PSB 解析器详设 |
+| [doc/04-性能要求.md](doc/04-性能要求.md) | 12 项性能验收表（含测量方法） |
+| [doc/05-里程碑计划.md](doc/05-里程碑计划.md) | M1~M7 分期计划 |
+| [doc/06-经验沉淀.md](doc/06-经验沉淀.md) | 踩坑与解法实录（Shell 扩展/Rust×C++/分发/调试方法论） |
+| [doc/验收记录.md](doc/验收记录.md) | 各里程碑实测验收数据 |
 
-## 后续开发（新会话指引）
+## 🛠️ 从源码构建
 
-在 **D:\work\pixlens** 目录打开 ZCode 会话，建议流程：
+```bash
+pnpm install                                # 前端依赖
+pnpm tauri dev                              # 开发运行
+cargo build -p psd-capi --release           # Rust 解码 cdylib（Shell 扩展核心）
+cmd /c shell-thumb-cpp\build.bat            # C++ 缩略图 COM DLL
+cp target/release/psd_capi.dll target/release/pixlens_psd.dll
+pnpm tauri build                            # NSIS 安装器（含缩略图扩展）
+cargo test                                  # 单元测试
+```
 
-1. 通读 `doc/` 全部文档与 `doc/验收记录.md`
-2. backlog 项见 `doc/01-需求定义.md` §8（EXIF 面板、RAW、JPEG 无损旋转、双图对比、ICC、跨平台）
-3. 每次改动后跑 `cargo test -p pixlens` 与相关 P 指标基准，结果续写 `doc/验收记录.md`
+## 🗺️ 路线图
 
-## 关键决策速览
+- [ ] EXIF 信息面板（相机参数、GPS）
+- [ ] RAW 格式（CR3/NEF/ARW/DNG）
+- [ ] JPEG 无损旋转
+- [ ] 双图对比视图、收藏/评分
+- [ ] 巨型图金字塔分块（tile://）
+- [ ] 超大 PSD/PSB 的 Explorer 缩略图（>512MB 流保护上限）
 
-| 决策项 | 结论 |
-|---|---|
-| 平台 | Windows 10/11 x64 桌面端 |
-| 技术栈 | Tauri 2（Rust + WebView2），前端 TS 无框架 |
-| 性能目标 | 万张流畅 + 超大图不卡 + 冷启动 < 1s |
-| 特色格式 | PSD / PSB（自研 Rust 解析器） |
-| 格式范围 | 常见格式 + 多页 TIFF / HDR（RAW 进 backlog） |
-| v1 功能 | 缩略图浏览 + 极速大图浏览 + 批量处理 + 基础编辑 |
-| 商业模式 | 完全免费、无广告、无内购、不联网 |
+---
+
+<div align="center">
+
+**PixLens · 图镜** —— 看图本该如此轻快
+
+</div>
