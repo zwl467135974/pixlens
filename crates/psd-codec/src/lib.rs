@@ -47,10 +47,14 @@ pub struct PsdInfo {
     pub height: u32,
     pub width: u32,
     pub depth: u16, // 1/8/16/32
-    pub mode: u16,  // 1=灰度, 3=RGB
+    pub mode: u16,  // 1=灰度, 3=RGB, 4=CMYK
     pub res_start: usize,
     pub res_end: usize,
     pub img_start: usize, // 压缩方式字段所在偏移
+    /// RLE 行表条目宽度：true=u32（规范 PSB）/ false=u16（PSD、旧式"PSB"）
+    pub wide: bool,
+    /// 资源块数据长度字段宽度：true=u64（仅自产旧样本）/ false=u32（真实世界）
+    pub res_wide: bool,
 }
 
 fn u16be(d: &[u8], o: usize) -> Result<u16, PsdError> {
@@ -85,11 +89,216 @@ fn len_size(version: u16) -> usize {
     }
 }
 
+/// 按显式宽度读段长（自适应布局候选用）
+fn read_width(d: &[u8], o: usize, w: usize) -> Result<u64, PsdError> {
+    if w == 8 {
+        u64be(d, o)
+    } else {
+        u32be(d, o).map(|v| v as u64)
+    }
+}
+
+/// 段长宽度候选：(颜色段, 资源段, 图层段)。
+/// 规范 PSB 实测形态（真实用户文件字节级验证）：颜色 u32 + 资源段 u32 +
+/// 图层段 u64 + RLE 行表 u32——Adobe 的 PSB 加宽清单只涉及图层相关长度。
+/// 其余候选：PSD/旧式工具"PSB"（全 u32 + 行表 u16）；自产旧样本（全 u64）。
+const LAYOUTS: [(usize, usize, usize); 6] = [
+    (4, 4, 8), // 规范 PSB
+    (4, 4, 4), // PSD；旧式工具导出的全 u32 "PSB"
+    (8, 8, 8), // 自产旧样本（历史兼容）
+    (4, 8, 8),
+    (8, 4, 8),
+    (8, 4, 4),
+];
+
+/// 流式布局解析：头部 26B 来自 head（尺寸/模式等），段长字段经字节源 pread
+/// 读取——与头缓冲大小彻底解耦（大资源段文件的图层长度字段可能远在文件后部）。
+/// 候选甄别同 try_layout（8BIM 锚点 + 压缩合法性 + 越界检查，全部可执行）。
+pub fn parse_source(
+    src: &mut dyn ByteSource,
+    head: &[u8],
+    total: u64,
+) -> Result<PsdInfo, PsdError> {
+    if head.len() < 26 {
+        return Err(PsdError::Truncated);
+    }
+    if &head[0..4] != b"8BPS" {
+        return Err(PsdError::BadSignature);
+    }
+    let version = u16be(head, 4)?;
+    if version != 1 && version != 2 {
+        return Err(PsdError::BadVersion(version));
+    }
+    let channels = u16be(head, 12)?;
+    let height = u32be(head, 14)?;
+    let width = u32be(head, 18)?;
+    let depth = u16be(head, 22)?;
+    let mode = u16be(head, 24)?;
+    if channels == 0 || channels > 56 {
+        return Err(PsdError::Unsupported("通道数非法".into()));
+    }
+    let max_dim: u32 = if version == 1 { 30_000 } else { 300_000 };
+    if width == 0 || height == 0 || width > max_dim || height > max_dim {
+        return Err(PsdError::TooLarge(format!("{width}×{height}")));
+    }
+    if !matches!(depth, 1 | 8 | 16 | 32) {
+        return Err(PsdError::UnsupportedDepth(depth));
+    }
+    if mode > 9 {
+        return Err(PsdError::UnsupportedMode(mode));
+    }
+    for &(cw, rw, lw) in &LAYOUTS {
+        if let Some(info) = try_layout_src(src, total, version, cw, rw, lw) {
+            return Ok(info);
+        }
+    }
+    Err(PsdError::Truncated)
+}
+
+/// try_layout 的字节源版：所有字段按需 pread（候选甄别比 head 版更强——
+/// 压缩方式字段总能读到，可参与校验）
+fn read_field(src: &mut dyn ByteSource, w8: &mut [u8; 8], off: u64, w: usize) -> Option<u64> {
+    let n = w.min(8);
+    src.pread(off, &mut w8[..n]).ok()?;
+    // 按实际宽度拼值（w=2 时不能把残留字节当高位）
+    let mut v: u64 = 0;
+    for i in 0..n {
+        v = (v << 8) | w8[i] as u64;
+    }
+    Some(v)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_layout_src(
+    src: &mut dyn ByteSource,
+    total: u64,
+    version: u16,
+    cw: usize,
+    rw: usize,
+    lw: usize,
+) -> Option<PsdInfo> {
+    let mut w8 = [0u8; 8];
+    let mut off: u64 = 26;
+    let color_len = read_field(src, &mut w8, off, cw)?;
+    off += cw as u64 + color_len;
+    if off > total {
+        return None;
+    }
+    let res_len = read_field(src, &mut w8, off, rw)?;
+    let res_start = off + rw as u64;
+    if res_len > 0 {
+        read_field(src, &mut w8, res_start, 4)?; // 签名校验
+        if &w8[..4] != b"8BIM" && &w8[..4] != b"8B64" {
+            return None;
+        }
+    }
+    off += rw as u64 + res_len;
+    if off > total {
+        return None;
+    }
+    let layer_len = read_field(src, &mut w8, off, lw)?;
+    off += lw as u64 + layer_len;
+    if off > total {
+        return None;
+    }
+    let img_start = off;
+    if img_start + 2 > total {
+        return None;
+    }
+    let comp = read_field(src, &mut w8, img_start, 2)? as u16;
+    if comp > 3 {
+        return None;
+    }
+    let _ = comp;
+    let mut hdr = [0u8; 26];
+    src.pread(0, &mut hdr).ok()?;
+    let (channels, height, width, depth, mode) = (
+        u16be(&hdr, 12).ok()?,
+        u32be(&hdr, 14).ok()?,
+        u32be(&hdr, 18).ok()?,
+        u16be(&hdr, 22).ok()?,
+        u16be(&hdr, 24).ok()?,
+    );
+    Some(PsdInfo {
+        version,
+        channels,
+        height,
+        width,
+        depth,
+        mode,
+        res_start: res_start as usize,
+        res_end: (res_start + res_len) as usize,
+        img_start: img_start as usize,
+        wide: lw == 8,
+        res_wide: rw == 8,
+    })
+}
+
+
+/// 资源段须以 8BIM/8B64 起始（最强锚点），段范围不得越界，压缩方式须合法。
+fn try_layout(d: &[u8], total: u64, version: u16, cw: usize, rw: usize, lw: usize) -> Option<PsdInfo> {
+    let mut off: u64 = 26;
+    let color_len = read_width(d, off as usize, cw).ok()?;
+    off += cw as u64 + color_len;
+    if off > total {
+        return None;
+    }
+    let res_len = read_width(d, off as usize, rw).ok()?;
+    let res_start = (off + rw as u64) as usize;
+    let res_end = (off + rw as u64 + res_len) as usize;
+    if res_len > 0 {
+        let sig = d.get(res_start..res_start + 4)?;
+        if sig != b"8BIM" && sig != b"8B64" {
+            return None;
+        }
+    }
+    off += rw as u64 + res_len;
+    if off > total {
+        return None;
+    }
+    let layer_len = read_width(d, off as usize, lw).ok()?;
+    off += lw as u64 + layer_len;
+    if off > total {
+        return None;
+    }
+    let img_start = off as usize;
+    if img_start as u64 + 2 > total {
+        return None;
+    }
+    // 压缩方式字段若在可读范围内则做合法性校验（增强候选甄别）
+    if let Ok(c) = u16be(d, img_start) {
+        if c > 3 {
+            return None;
+        }
+    }
+    let (channels, height, width, depth, mode) = (
+        u16be(d, 12).ok()?,
+        u32be(d, 14).ok()?,
+        u32be(d, 18).ok()?,
+        u16be(d, 22).ok()?,
+        u16be(d, 24).ok()?,
+    );
+    Some(PsdInfo {
+        version,
+        channels,
+        height,
+        width,
+        depth,
+        mode,
+        res_start,
+        res_end,
+        img_start,
+        wide: lw == 8,
+        res_wide: rw == 8,
+    })
+}
+
 pub fn parse(data: &[u8]) -> Result<PsdInfo, PsdError> {
     parse_prefix(data, data.len() as u64)
 }
 
-/// 前缀解析：头部字段从 head 读取，段范围按 total（完整文件长度）校验——
+/// 前缀解析：头部字段从 head 读取，段定位按 LAYOUTS 候选自适应
+/// （规范 PSB / 全 u32 旧式 / 全 u64 自产旧样本），段范围按 total 校验——
 /// 供流式路径使用（只持有文件前部，合成数据经字节源按需读取）
 pub fn parse_prefix(d: &[u8], total: u64) -> Result<PsdInfo, PsdError> {
     if d.len() < 26 {
@@ -122,46 +331,12 @@ pub fn parse_prefix(d: &[u8], total: u64) -> Result<PsdInfo, PsdError> {
         return Err(PsdError::UnsupportedMode(mode));
     }
 
-    let ls = len_size(version);
-    let mut off: u64 = 26;
-
-    // 颜色模式数据段（跳过）
-    let color_len = read_len(d, off as usize, version)?;
-    off += ls as u64 + color_len;
-    if off > total {
-        return Err(PsdError::Truncated);
+    for &(cw, rw, lw) in &LAYOUTS {
+        if let Some(info) = try_layout(d, total, version, cw, rw, lw) {
+            return Ok(info);
+        }
     }
-    // 图像资源段
-    let res_len = read_len(d, off as usize, version)?;
-    let res_start = (off + ls as u64) as usize;
-    let res_end = (off + ls as u64 + res_len) as usize;
-    off += ls as u64 + res_len;
-    if off > total {
-        return Err(PsdError::Truncated);
-    }
-    // 图层与蒙版段（v1 整体跳过）
-    let layer_len = read_len(d, off as usize, version)?;
-    off += ls as u64 + layer_len;
-    if off > total {
-        return Err(PsdError::Truncated);
-    }
-    // 图像数据段
-    let img_start = off as usize;
-    if img_start as u64 + 2 > total {
-        return Err(PsdError::Truncated);
-    }
-
-    Ok(PsdInfo {
-        version,
-        channels,
-        height,
-        width,
-        depth,
-        mode,
-        res_start,
-        res_end,
-        img_start,
-    })
+    Err(PsdError::Truncated)
 }
 
 // ── 1036 内嵌缩略图快路径 ───────────────
@@ -181,8 +356,10 @@ pub fn embedded_thumbnail(data: &[u8], info: &PsdInfo) -> Option<Vec<u8>> {
         p += 1;
         let name_padded = if (1 + name_len) % 2 == 1 { name_len + 1 } else { name_len };
         p += name_padded;
-        let dlen = read_len(data, p, info.version).ok()? as usize;
-        let dstart = p.checked_add(len_size(info.version))?;
+        // 资源块数据长度宽度跟随文件布局（规范 PSB u64 / 全 u32 变体 u32）
+        let lw = if info.res_wide { 8 } else { 4 };
+        let dlen = read_width(data, p, lw).ok()? as usize;
+        let dstart = p.checked_add(lw)?;
         let dend = dstart.checked_add(dlen)?;
         if id == 1036 {
             let res = data.get(dstart..dend.min(data.len()))?;
@@ -305,7 +482,7 @@ pub fn decode_composite(
         0 => None, // Raw：直接按公式定位
         1 => {
             // RLE：行字节数表（行数×通道数 个 u16(PSD)/u32(PSB)）
-            let ent = if info.version == 2 { 4 } else { 2 };
+            let ent = if info.wide { 4 } else { 2 };
             let tbl = info.img_start + 2;
             if tbl + rows_total * ent > data.len() {
                 return Err(PsdError::Truncated);
@@ -313,7 +490,7 @@ pub fn decode_composite(
             let mut offs = Vec::with_capacity(rows_total);
             let mut cur = tbl + rows_total * ent;
             for i in 0..rows_total {
-                let rl = if info.version == 2 {
+                let rl = if info.wide {
                     u32be(data, tbl + i * ent)? as usize
                 } else {
                     u16be(data, tbl + i * ent)? as usize
@@ -461,14 +638,14 @@ pub fn decode_composite_source(
     let row_loc: Option<Vec<(u64, usize)>> = match compression {
         0 => None,
         1 => {
-            let ent = if info.version == 2 { 4 } else { 2 };
+            let ent = if info.wide { 4 } else { 2 };
             let tbl = info.img_start as u64 + 2;
             let mut table = vec![0u8; rows_total * ent];
             src.pread(tbl, &mut table)?;
             let mut offs = Vec::with_capacity(rows_total);
             let mut cur = tbl + rows_total as u64 * ent as u64;
             for i in 0..rows_total {
-                let rl = if info.version == 2 {
+                let rl = if info.wide {
                     u32be(&table, i * ent)? as u64
                 } else {
                     u16be(&table, i * ent)? as u64
@@ -629,10 +806,24 @@ pub fn encode_psd(
     compression: u16,
     thumbnail: Option<&[u8]>,
 ) -> Vec<u8> {
+    encode_psd_layout(ch, version, compression, thumbnail, version == 2)
+}
+
+/// 按显式段宽布局编码。wide=true：资源/图层段 u64 + 行表 u32（规范 PSB）；
+/// wide=false：全 u32 + 行表 u16（PSD；version=2 + wide=false 即部分工具
+/// 导出的旧式"PSB"实测形态，供回归测试）。
+#[allow(clippy::too_many_arguments)]
+pub fn encode_psd_layout(
+    ch: &PsdChannels,
+    version: u16,
+    compression: u16,
+    thumbnail: Option<&[u8]>,
+    wide: bool,
+) -> Vec<u8> {
     let w = ch.width;
     let h = ch.height;
     let nch = ch.planes.len() as u16;
-    let ls = len_size(version);
+    let ls = if wide { 8 } else { 4 };
     let mut out: Vec<u8> = Vec::new();
 
     // 头部 26B
@@ -645,23 +836,25 @@ pub fn encode_psd(
     out.extend_from_slice(&ch.depth.to_be_bytes());
     out.extend_from_slice(&ch.mode.to_be_bytes());
 
-    // 颜色模式数据：空
-    out.extend_from_slice(&vec![0u8; ls]);
+    // 颜色模式数据：空（规范规定颜色段长度恒 u32，PSD/PSB 相同）
+    out.extend_from_slice(&[0u8; 4]);
     // 图像资源
     let mut res: Vec<u8> = Vec::new();
     if let Some(jpeg) = thumbnail {
         res.extend_from_slice(b"8BIM");
         res.extend_from_slice(&1036u16.to_be_bytes());
         res.extend_from_slice(&[0u8, 0u8]); // 空 Pascal 名（偶数对齐）
-        write_len_field(&mut res, jpeg.len() as u64, version);
+        // 资源块数据长度：真实世界恒 u32（含 PSB）
+        res.extend_from_slice(&(jpeg.len() as u32).to_be_bytes());
         res.extend_from_slice(jpeg);
         if jpeg.len() % 2 == 1 {
             res.push(0);
         }
     }
-    write_len_field(&mut out, res.len() as u64, version);
+    // 资源段长度：恒 u32（规范 PSB 同样，实测真实文件验证）
+    out.extend_from_slice(&(res.len() as u32).to_be_bytes());
     out.extend_from_slice(&res);
-    // 图层与蒙版：空
+    // 图层与蒙版：空（宽度随布局：规范 PSB u64，其余 u32）
     out.extend_from_slice(&vec![0u8; ls]);
 
     // 图像数据
@@ -687,7 +880,7 @@ pub fn encode_psd(
                 }
             }
             for t in &table {
-                if version == 2 {
+                if wide {
                     out.extend_from_slice(&(*t as u32).to_be_bytes());
                 } else {
                     out.extend_from_slice(&(*t as u16).to_be_bytes());
@@ -880,6 +1073,61 @@ mod tests {
     }
 
     #[test]
+    fn legacy_psb_u32_layout_parses() {
+        // 部分工具导出的"PSB"（version=2 头 + 全 u32 段长 + u16 行表），
+        // 来自真实用户文件（游戏管线 396×36 RGBA）。自适应布局应选中全 u32 候选。
+        let ch = deterministic(48, 20, 4, 8);
+        for &comp in &[0u16, 1u16] {
+            let data = encode_psd_layout(&ch, 2, comp, None, false);
+            let info = parse(&data).unwrap();
+            assert_eq!(info.version, 2);
+            assert!(!info.wide, "应识别为 u32 布局");
+            let c = decode_composite(&data, &info, 0, 1.0).unwrap();
+            assert_eq!(c.image.dimensions(), (48, 20));
+            let expect = expected_rgba(&ch, true);
+            for (i, px) in c.image.pixels().enumerate() {
+                assert_eq!(px.0, expect[i], "legacy v2 comp{comp} @{i}");
+            }
+            // 流式路径同样正确
+            let info2 = parse_prefix(&data[..64], data.len() as u64).unwrap();
+            assert!(!info2.wide);
+            let mut src = SliceSource(&data[..]);
+            let s = decode_composite_source(&mut src, &info2, 0, 1.0).unwrap();
+            assert_eq!(s.image.into_raw(), c.image.into_raw());
+        }
+    }
+
+    #[test]
+    fn parse_source_handles_huge_resource_section() {
+        // 真实 640MB PSD 的形态：资源段 ~4MB（含大 ICC 等），图层长度字段远在
+        // 2MB 头之外——parse_source 经字节源 pread 读取布局字段，与头大小解耦
+        let mut ch = deterministic(40, 30, 3, 8);
+        let data = encode_psd(&ch, 1, 1, None);
+        // 在资源段塞入一个 5MB 的填充资源块（id 1037），重排段
+        let info = parse(&data).unwrap();
+        let mut res: Vec<u8> = Vec::new();
+        res.extend_from_slice(b"8BIM");
+        res.extend_from_slice(&1037u16.to_be_bytes());
+        res.extend_from_slice(&[0, 0]); // 空 Pascal 名
+        res.extend_from_slice(&5_000_000u32.to_be_bytes());
+        res.extend_from_slice(&vec![0xABu8; 5_000_000]);
+        let mut out: Vec<u8> = data[..30].to_vec(); // 30 = 资源段长度字段位置
+        out.extend_from_slice(&(res.len() as u32).to_be_bytes());
+        out.extend_from_slice(&res);
+        out.extend_from_slice(&data[34..]); // 旧资源段为空：34 起即图层段
+        let total = out.len() as u64;
+        let info2 = parse(&out).unwrap();
+        // head 仅 26B（极端小头）；字节源本身全量可寻址——布局字段经 pread 不受头限制
+        let mut src = SliceSource(&out[..]);
+        let info3 = parse_source(&mut src, &out[..26], total).unwrap();
+        assert_eq!(info3.img_start, info2.img_start);
+        let a = decode_composite(&out, &info2, 0, 1.0).unwrap();
+        let mut src2 = SliceSource(&out[..]);
+        let b = decode_composite_source(&mut src2, &info3, 0, 1.0).unwrap();
+        assert_eq!(a.image.into_raw(), b.image.into_raw());
+    }
+
+    #[test]
     fn embedded_thumbnail_strips_photoshop_header() {
         // 真实 Photoshop 的 1036：28 字节头 + JFIF。头内字段值取真实形态
         //（version=1、缩略图宽高、压缩后大小），扫描 SOI 应跳过头。
@@ -1002,3 +1250,4 @@ pub fn tone_map(v: f32, exposure: f32) -> u8 {
     let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
     (s * 255.0 + 0.5) as u8
 }
+

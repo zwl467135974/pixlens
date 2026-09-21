@@ -150,7 +150,9 @@ public:
             if (m_stream) m_stream->Release();
             m_stream = stream;
             m_data.clear();
-            const size_t HEAD = (size_t)2 << 20;
+            // 8MB 头：真实文件的资源段可达数 MB（大 ICC 等），1036 需在头内命中；
+            // 布局字段与合成数据另经流 seek 按需读取，不受此限制
+            const size_t HEAD = (size_t)8 << 20;
             std::vector<unsigned char> buf(1 << 20);
             ULONG n = 0;
             for (;;) {

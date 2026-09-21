@@ -133,11 +133,16 @@ pub extern "C" fn pixlens_psd_composite_rgba_stream(
             return -1;
         }
         let head = unsafe { std::slice::from_raw_parts(head, head_len) };
-        let info = match psd_codec::parse_prefix(head, total) {
-            Ok(i) => i,
-            Err(_) => return -2,
-        };
         let mut src = StreamSource { ctx, seek, read };
+        // 布局字段经字节源按需读取——图层长度字段可能在文件后部（大资源段文件），
+        // 不受 head 缓冲大小限制
+        let info = match psd_codec::parse_source(&mut src, head, total) {
+            Ok(i) => i,
+            Err(e) => {
+                let _ = e;
+                return -2;
+            }
+        };
         let comp = match psd_codec::decode_composite_source(&mut src, &info, cx, 1.0) {
             Ok(c) => c,
             Err(_) => return -3,
@@ -169,7 +174,9 @@ unsafe fn cstr(p: *const c_char) -> Option<&'static std::path::Path> {
 }
 
 fn embedded_impl(data: &[u8], out_jpeg: *mut u8, out_cap: usize) -> i32 {
-    let Some(info) = psd_codec::parse(data).ok() else {
+    // total 放宽到 u64::MAX：head 缓冲不含图层/图像段（大资源段文件图层字段
+    // 远在文件后部），段范围校验对资源行走无意义；候选甄别靠 8BIM 锚点
+    let Some(info) = psd_codec::parse_prefix(data, u64::MAX).ok() else {
         return 0;
     };
     match psd_codec::embedded_thumbnail(data, &info) {

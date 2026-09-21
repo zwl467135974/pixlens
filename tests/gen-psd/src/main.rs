@@ -287,12 +287,7 @@ fn push_resource(out: &mut Vec<u8>, version: u16, id: u16, name: &[u8], data: &[
     if (1 + name.len()) % 2 == 1 {
         out.push(0);
     }
-    let len_field: Vec<u8> = if version == 2 {
-        (data.len() as u64).to_be_bytes().to_vec()
-    } else {
-        (data.len() as u32).to_be_bytes().to_vec()
-    };
-    out.extend_from_slice(&len_field);
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
     out.extend_from_slice(data);
     if data.len() % 2 == 1 {
         out.push(0);
@@ -312,11 +307,7 @@ fn write_real_file(path: &std::path::Path, ch: &PsdChannels, version: u16, res: 
     out.extend_from_slice(&ch.depth.to_be_bytes());
     out.extend_from_slice(&ch.mode.to_be_bytes());
     out.extend_from_slice(&vec![0u8; ls]); // 颜色模式数据：空
-    if version == 2 {
-        out.extend_from_slice(&(res.len() as u64).to_be_bytes());
-    } else {
-        out.extend_from_slice(&(res.len() as u32).to_be_bytes());
-    }
+    out.extend_from_slice(&(res.len() as u32).to_be_bytes());
     out.extend_from_slice(res);
     out.extend_from_slice(&vec![0u8; ls]); // 图层与蒙版：空
     out.extend_from_slice(&1u16.to_be_bytes()); // RLE
