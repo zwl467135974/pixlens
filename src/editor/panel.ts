@@ -173,11 +173,13 @@ export class EditorPanel {
     this.ops.flipH = this.viewer.flipH;
     this.ops.flipV = this.viewer.flipV;
     this.root.classList.remove("hidden");
+    requestAnimationFrame(() => this.root.classList.add("in"));
     this.applyPreview();
   }
 
   close(): void {
-    this.root.classList.add("hidden");
+    this.root.classList.remove("in");
+    window.setTimeout(() => this.root.classList.add("hidden"), 260);
     this.viewer.exitCropMode();
     this.viewer.setPreviewFilter("none");
   }

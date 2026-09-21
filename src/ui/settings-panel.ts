@@ -60,10 +60,12 @@ export class SettingsPanel {
       /* 默认值兜底 */
     }
     this.root.classList.remove("hidden");
+    requestAnimationFrame(() => this.root.classList.add("in"));
   }
 
   close(): void {
-    this.root.classList.add("hidden");
+    this.root.classList.remove("in");
+    window.setTimeout(() => this.root.classList.add("hidden"), 260);
   }
 
   private async save(): Promise<void> {

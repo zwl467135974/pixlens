@@ -229,6 +229,10 @@ export class Viewer {
     if (i < 0) return;
     this.open_ = true;
     this.root.classList.remove("hidden");
+    // 入场过渡（重启动画：先移除再强制回流再加回）
+    this.root.classList.remove("open");
+    void this.root.offsetWidth;
+    this.root.classList.add("open");
     this.resize();
     void this.show(i);
   }
@@ -237,7 +241,11 @@ export class Viewer {
     this.open_ = false;
     this.stopSlideshow();
     if (document.fullscreenElement) void document.exitFullscreen();
-    this.root.classList.add("hidden");
+    // 退场过渡：先淡出，250ms 后真正隐藏
+    this.root.classList.remove("open");
+    window.setTimeout(() => {
+      this.root.classList.add("hidden");
+    }, 240);
     this.cur = null;
     this.fullFrame = null;
     this.gifLayer.src = "";
@@ -289,11 +297,36 @@ export class Viewer {
     await this.getPreview(entry, this.page, this.exposure);
     if (token !== this.fullToken || this.cur?.path !== entry.path) return;
     // 默认按原始大小显示（100%，不放大铺满）；适应窗口用 0 键/按钮/双击切换
-    this.one();
+    this.pageFade = 0;
+    this.runPageFade();
+    this.animT = null; // 直接设目标（新图从 100% 起步，不播旧变换的插值）
+    this.scale = 1;
+    this.offX = this.canvas.clientWidth / 2;
+    this.offY = this.canvas.clientHeight / 2;
     this.draw();
     this.updateVariantUi();
     this.prefetch(i);
     void this.loadFull(entry, token);
+  }
+
+  /** 翻页/打开时图片 180ms 淡入 */
+  private pageFade = 1;
+  private fadeActive = false;
+
+  private runPageFade(): void {
+    if (this.fadeActive) return;
+    this.fadeActive = true;
+    const t0 = performance.now();
+    const step = () => {
+      this.pageFade = Math.min(1, (performance.now() - t0) / 180);
+      this.draw();
+      if (this.pageFade < 1 && this.open_) {
+        requestAnimationFrame(step);
+      } else {
+        this.fadeActive = false;
+      }
+    };
+    requestAnimationFrame(step);
   }
 
   /** LRU 键：路径 + 页码/曝光变体（仅相关格式带变体后缀） */
@@ -410,7 +443,7 @@ export class Viewer {
     }
   }
 
-  // ── 变换 ─────────────────────────────
+  // ── 变换（缩放/平移/旋转均带 160ms 平滑插值；bench 的 panBy 保持直设） ──
   private fit(): void {
     const f = this.effective();
     if (!f) return;
@@ -419,24 +452,17 @@ export class Viewer {
     const h = rotated ? f.naturalW : f.naturalH;
     const cw = this.canvas.clientWidth;
     const ch = this.canvas.clientHeight;
-    this.scale = Math.min(cw / w, ch / h);
-    this.offX = cw / 2;
-    this.offY = ch / 2;
+    this.animateTo(Math.min(cw / w, ch / h), cw / 2, ch / 2);
   }
 
   private one(): void {
-    this.scale = 1;
-    this.offX = this.canvas.clientWidth / 2;
-    this.offY = this.canvas.clientHeight / 2;
+    this.animateTo(1, this.canvas.clientWidth / 2, this.canvas.clientHeight / 2);
   }
 
   zoomAt(cx: number, cy: number, factor: number): void {
     const ns = Math.min(MAX_SCALE, Math.max(MIN_SCALE, this.scale * factor));
     const f = ns / this.scale;
-    this.scale = ns;
-    this.offX = cx - f * (cx - this.offX);
-    this.offY = cy - f * (cy - this.offY);
-    this.draw();
+    this.animateTo(ns, cx - f * (cx - this.offX), cy - f * (cy - this.offY));
   }
 
   panBy(dx: number, dy: number): void {
@@ -446,17 +472,61 @@ export class Viewer {
   }
 
   rotate(deg: number): void {
-    this.rot = (this.rot + deg + 360) % 360;
-    // 保持当前缩放，旋转后居中
-    this.offX = this.canvas.clientWidth / 2;
-    this.offY = this.canvas.clientHeight / 2;
-    this.draw();
+    const target = (this.rot + deg + 360) % 360;
+    // 最短弧插值（90° 步进天然最短）
+    this.animateTo(this.scale, this.canvas.clientWidth / 2, this.canvas.clientHeight / 2, target);
   }
 
   flip(axis: "h" | "v"): void {
     if (axis === "h") this.flipH = !this.flipH;
     else this.flipV = !this.flipV;
     this.draw();
+  }
+
+  // ── 变换动画（指数插值，收敛即停） ─────────
+  private animActive = false;
+  private animT: { s: number; x: number; y: number; r: number } | null = null;
+
+  private animateTo(s: number, x: number, y: number, r?: number): void {
+    this.animT = { s, x, y, r: r ?? this.rot };
+    if (!this.animActive) {
+      this.animActive = true;
+      requestAnimationFrame(() => this.animStep());
+    }
+  }
+
+  private animStep(): void {
+    const t = this.animT;
+    if (!t || !this.open_) {
+      this.animActive = false;
+      return;
+    }
+    const k = 0.3; // 插值系数（每帧靠近目标 30%）
+    this.scale += (t.s - this.scale) * k;
+    this.offX += (t.x - this.offX) * k;
+    this.offY += (t.y - this.offY) * k;
+    // 旋转最短弧
+    let dr = t.r - this.rot;
+    if (dr > 180) dr -= 360;
+    if (dr < -180) dr += 360;
+    this.rot = (this.rot + dr * k + 360) % 360;
+    this.draw();
+    const done =
+      Math.abs(t.s - this.scale) < 1e-4 &&
+      Math.abs(t.x - this.offX) < 0.3 &&
+      Math.abs(t.y - this.offY) < 0.3 &&
+      Math.abs(dr) < 0.05;
+    if (done) {
+      this.scale = t.s;
+      this.offX = t.x;
+      this.offY = t.y;
+      this.rot = t.r;
+      this.animT = null;
+      this.animActive = false;
+      this.draw();
+    } else {
+      requestAnimationFrame(() => this.animStep());
+    }
   }
 
   // ── 绘制 ─────────────────────────────
@@ -492,11 +562,13 @@ export class Viewer {
       this.gifLayer.style.width = `${f.naturalW}px`;
       this.gifLayer.style.height = `${f.naturalH}px`;
       this.gifLayer.style.transform = this.cssTransform();
+      this.gifLayer.style.opacity = `${this.pageFade}`;
       this.zoomLabel.textContent = `${Math.round(this.scale * 100)}%`;
     } else {
       this.gifLayer.classList.add("hidden");
       // 编辑预览滤镜：只在绘制图像时启用（底色不受影响）
       ctx.filter = this.previewFilter;
+      ctx.globalAlpha = this.pageFade;
       ctx.translate(this.offX, this.offY);
       ctx.rotate((this.rot * Math.PI) / 180);
       const sx = this.flipH ? -this.scale : this.scale;
@@ -505,6 +577,7 @@ export class Viewer {
       // >100% 时关闭平滑（像素视图），<100% 时开启（缩小时抗锯齿）
       ctx.imageSmoothingEnabled = this.scale < 1;
       ctx.drawImage(f.src.bmp, -f.naturalW / 2, -f.naturalH / 2, f.naturalW, f.naturalH);
+      ctx.globalAlpha = 1;
       ctx.filter = "none";
       this.zoomLabel.textContent = `${Math.round(this.scale * 100)}%`;
     }
@@ -725,7 +798,11 @@ export class Viewer {
 
   // ── bench 专用 ───────────────────────
   async benchWaitFull(entry: Entry): Promise<void> {
-    this.one();
+    // 验收路径：直接设 100%（不走动画，保证测量即时生效）
+    this.animT = null;
+    this.scale = 1;
+    this.offX = this.canvas.clientWidth / 2;
+    this.offY = this.canvas.clientHeight / 2;
     this.draw();
     if (this.fullFrame) return;
     // 等待全尺寸就绪；15s 超时保护（加载失败时不挂死验收流程）

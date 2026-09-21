@@ -701,3 +701,157 @@ body {
 #grid::-webkit-scrollbar-thumb:hover {
   background: #4d4d5a;
 }
+
+/* ═══ 动效层（v1.2 丝滑打磨）——全部走 transform/opacity 合成器路径 ═══ */
+
+/* ── 按钮微交互 ── */
+.btn {
+  transition: transform .14s cubic-bezier(.2,.8,.3,1.4), background-color .15s, border-color .15s, box-shadow .15s;
+}
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(0,0,0,.28);
+}
+.btn:active:not(:disabled) {
+  transform: translateY(0) scale(.955);
+  box-shadow: none;
+}
+#toolbar .btn, #viewer-bar button {
+  transition: transform .14s cubic-bezier(.2,.8,.3,1.4), background-color .15s, border-color .15s, box-shadow .15s, color .15s;
+}
+#viewer-bar button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 12px rgba(0,0,0,.35);
+}
+#viewer-bar button:active {
+  transform: scale(.92);
+}
+
+/* ── 面板抽屉/弹出动画 ── */
+#batch-panel, #editor-panel {
+  opacity: 0;
+  transform: translateX(36px);
+  transition: opacity .2s ease, transform .26s cubic-bezier(.2,.9,.25,1);
+  will-change: transform, opacity;
+}
+#batch-panel.in, #editor-panel.in {
+  opacity: 1;
+  transform: translateX(0);
+}
+#settings-panel {
+  opacity: 0;
+  transform: translateY(-10px) scale(.96);
+  transform-origin: top right;
+  transition: opacity .16s ease, transform .2s cubic-bezier(.2,.9,.3,1.3);
+}
+#settings-panel.in {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* ── 毛玻璃：所有浮层 ── */
+#viewer-bar, #viewer-info {
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+}
+#batch-panel, #editor-panel, #settings-panel {
+  backdrop-filter: blur(22px) saturate(1.25);
+  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+}
+#batch-panel, #editor-panel {
+  background: rgba(30, 30, 38, .88);
+}
+#settings-panel {
+  background: rgba(30, 30, 38, .9);
+}
+
+/* ── 查看器开合过渡 ── */
+#viewer {
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+#viewer.open {
+  opacity: 1;
+}
+#viewer.open #viewer-canvas {
+  animation: viewerIn .24s cubic-bezier(.2,.8,.3,1);
+}
+#viewer.open #viewer-bar {
+  animation: barUp .26s cubic-bezier(.2,.9,.3,1.15);
+}
+@keyframes viewerIn {
+  from { opacity: 0; transform: scale(.965); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes barUp {
+  from { opacity: 0; transform: translate(-50%, 14px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ── 查看器翻页淡入（GIF 叠加层走 CSS） ── */
+#viewer-gif {
+  transition: opacity .18s ease;
+}
+
+/* ── 空态页：呼吸光环 + 入场 ── */
+.empty-ring {
+  animation: ringBreathe 3.2s ease-in-out infinite;
+}
+#empty > * {
+  animation: fadeUp .5s cubic-bezier(.2,.8,.3,1) backwards;
+}
+#empty > *:nth-child(2) { animation-delay: .08s; }
+#empty > *:nth-child(3) { animation-delay: .16s; }
+@keyframes ringBreathe {
+  0%, 100% { box-shadow: 0 0 34px rgba(108,102,232,.32); transform: scale(1); }
+  50%      { box-shadow: 0 0 62px rgba(108,102,232,.55); transform: scale(1.035); }
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── 工具栏首次入场 stagger ── */
+#toolbar > * {
+  animation: fadeUp .4s cubic-bezier(.2,.8,.3,1) backwards;
+}
+#toolbar > *:nth-child(1) { animation-delay: .02s; }
+#toolbar > *:nth-child(2) { animation-delay: .05s; }
+#toolbar > *:nth-child(3) { animation-delay: .08s; }
+#toolbar > *:nth-child(4) { animation-delay: .11s; }
+#toolbar > *:nth-child(5) { animation-delay: .14s; }
+#toolbar > *:nth-child(6) { animation-delay: .17s; }
+#toolbar > *:nth-child(7) { animation-delay: .2s; }
+#toolbar > *:nth-child(8) { animation-delay: .23s; }
+#toolbar > *:nth-child(9) { animation-delay: .26s; }
+
+/* ── 进度条微光 ── */
+.bp-bar div {
+  background-image: linear-gradient(90deg, var(--accent), #8f88ff, var(--accent));
+  background-size: 200% 100%;
+  animation: barShimmer 1.4s linear infinite;
+}
+@keyframes barShimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+/* ── 排序方向按钮旋转过渡 ── */
+#sort-dir {
+  transition: transform .22s cubic-bezier(.2,.8,.3,1.3);
+}
+#sort-dir:hover {
+  transform: rotate(12deg);
+}
+
+/* ── 状态栏文字过渡 ── */
+#status-left, #status-right {
+  transition: opacity .14s ease;
+}
+
+/* ── 浅色主题下面板底色 ── */
+:root[data-theme="light"] #batch-panel,
+:root[data-theme="light"] #editor-panel,
+:root[data-theme="light"] #settings-panel {
+  background: rgba(255, 255, 255, .9);
+}

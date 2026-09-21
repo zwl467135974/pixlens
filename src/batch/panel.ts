@@ -123,11 +123,13 @@ export class BatchPanel {
 
   open(): void {
     this.root.classList.remove("hidden");
+    requestAnimationFrame(() => this.root.classList.add("in"));
     void this.refreshPreview();
   }
 
   close(): void {
-    this.root.classList.add("hidden");
+    this.root.classList.remove("in");
+    window.setTimeout(() => this.root.classList.add("hidden"), 260);
     this.onClose();
   }
 

@@ -21,10 +21,12 @@ export class Grid {
   private rowH = 172;
   private raf = 0;
   private dpr = 1;
-  /** 解码位图 LRU（键 = thumb URL） */
-  private bitmaps = new Map<string, ImageBitmap>();
+  /** 解码位图 LRU（键 = thumb URL；at = 加载完成时刻，用于淡入动效） */
+  private bitmaps = new Map<string, { bmp: ImageBitmap; at: number }>();
   private inflight = new Set<string>();
   private selected = new Set<string>();
+  /** hover 命中的条目索引（-1 无） */
+  private hoverIdx = -1;
 
   tileSize = 160;
   /** tile 点击回调（选择，含修饰键信息） */
@@ -59,6 +61,21 @@ export class Grid {
       const e = this.hitTest(ev);
       if (e) this.onTileOpen(e);
     });
+    this.canvas.addEventListener("mousemove", (ev) => {
+      const rect = this.canvas.getBoundingClientRect();
+      const idx = this.hitIndexAt(ev.clientX - rect.left, ev.clientY - rect.top);
+      if (idx !== this.hoverIdx) {
+        this.hoverIdx = idx;
+        this.canvas.style.cursor = idx >= 0 ? "pointer" : "default";
+        this.schedule();
+      }
+    });
+    this.canvas.addEventListener("mouseleave", () => {
+      if (this.hoverIdx !== -1) {
+        this.hoverIdx = -1;
+        this.schedule();
+      }
+    });
   }
 
   setEntries(list: Entry[]): void {
@@ -91,22 +108,25 @@ export class Grid {
 
   private hitTest(ev: MouseEvent): Entry | null {
     const rect = this.canvas.getBoundingClientRect();
-    const x = ev.clientX - rect.left;
-    const y = ev.clientY - rect.top + this.el.scrollTop;
+    const idx = this.hitIndexAt(ev.clientX - rect.left, ev.clientY - rect.top);
+    return idx >= 0 ? (this.entries[idx] ?? null) : null;
+  }
+
+  /** 视口坐标 → 条目索引（-1 未命中；含 2px 间隙宽容） */
+  private hitIndexAt(x: number, yView: number): number {
+    const y = yView + this.el.scrollTop;
     const pitch = this.tileSize + this.gap;
     const col = Math.floor(x / pitch);
     const row = Math.floor((y - this.gap) / this.rowH);
-    if (col < 0 || col >= this.cols || row < 0) return null;
+    if (col < 0 || col >= this.cols || row < 0) return -1;
     const idx = row * this.cols + col;
-    const e = this.entries[idx];
-    if (!e) return null;
-    // 命中 tile 实际矩形（含间隙宽容 2px）
+    if (!this.entries[idx]) return -1;
     const tx = this.gap + col * pitch;
     const ty = this.gap + row * this.rowH;
     if (x < tx - 2 || x > tx + this.tileSize + 2 || y < ty - 2 || y > ty + this.tileSize + 2) {
-      return null;
+      return -1;
     }
-    return e;
+    return idx;
   }
 
   private relayout(): void {
@@ -137,6 +157,8 @@ export class Grid {
     const ctx = this.ctx;
     const w = this.canvas.width;
     const h = this.canvas.height;
+    const now = performance.now();
+    let animating = false;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = "#1a1a1f";
     if (document.documentElement.dataset.theme === "light") {
@@ -168,16 +190,31 @@ export class Grid {
         ctx.fillStyle = tileBg;
         this.roundRect(ctx, x, y, this.tileSize, this.tileSize, 6);
         ctx.fill();
-        // 位图
+        // 位图（加载完成后 160ms 淡入）
         const key = thumbUrl(e, this.tileSize);
-        const bmp = this.bitmaps.get(key);
-        if (bmp) {
+        const rec = this.bitmaps.get(key);
+        if (rec) {
+          const alpha = Math.min(1, (now - rec.at) / 160);
+          if (alpha < 1) animating = true; // 未完成淡入 → 下一帧继续
+          const bmp = rec.bmp;
           const scale = Math.min(this.tileSize / bmp.width, this.tileSize / bmp.height);
           const dw = bmp.width * scale;
           const dh = bmp.height * scale;
+          ctx.globalAlpha = alpha;
           ctx.drawImage(bmp, x + (this.tileSize - dw) / 2, y + (this.tileSize - dh) / 2, dw, dh);
+          ctx.globalAlpha = 1;
         } else {
           this.loadThumb(e, key);
+        }
+        // hover 高亮（未选中时）
+        if (idx === this.hoverIdx && !this.selected.has(e.path)) {
+          ctx.strokeStyle = "rgba(160,155,240,0.9)";
+          ctx.lineWidth = 2;
+          this.roundRect(ctx, x + 1, y + 1, this.tileSize - 2, this.tileSize - 2, 6);
+          ctx.stroke();
+          ctx.fillStyle = "rgba(255,255,255,0.05)";
+          this.roundRect(ctx, x, y, this.tileSize, this.tileSize, 6);
+          ctx.fill();
         }
         // 选中态
         if (this.selected.has(e.path)) {
@@ -191,6 +228,8 @@ export class Grid {
         }
       }
     }
+    // 有未完成的淡入 → 下一帧继续（动画结束自动停，不空转）
+    if (animating) this.schedule();
   }
 
   private roundRect(
@@ -221,12 +260,12 @@ export class Grid {
         const bmp = await createImageBitmap(blob);
         // LRU 淘汰（淘汰即释放）
         this.bitmaps.delete(key);
-        this.bitmaps.set(key, bmp);
+        this.bitmaps.set(key, { bmp, at: performance.now() });
         while (this.bitmaps.size > BMP_CAPACITY) {
           const oldest = this.bitmaps.keys().next().value as string;
           const old = this.bitmaps.get(oldest);
           this.bitmaps.delete(oldest);
-          old?.close();
+          old?.bmp.close();
         }
         this.onThumbLoaded(e);
         this.schedule();
