@@ -60,6 +60,21 @@ export interface BatchProgress {
   finished: boolean;
 }
 
+export interface ExifInfo {
+  make: string | null;
+  model: string | null;
+  lens: string | null;
+  focalLength: string | null;
+  focalLength35mm: string | null;
+  fNumber: string | null;
+  exposure: string | null;
+  iso: number | null;
+  datetime: string | null;
+  gps: string | null;
+  orientation: number | null;
+  software: string | null;
+}
+
 /** Windows 下自定义协议经 http://<scheme>.localhost 访问（wry 行为） */
 const THUMB_BASE = "http://thumb.localhost/pixlens";
 const IMAGE_BASE = "http://image.localhost/pixlens";
@@ -92,6 +107,7 @@ export const ipc = {
   batchCancel: (jobId: number) => invoke<boolean>("batch_cancel", { jobId }),
   editApply: (src: string, ops: unknown, overwrite: boolean, quality: number) =>
     invoke<string>("edit_apply", { src, ops, overwrite, quality }),
+  readExif: (path: string) => invoke<ExifInfo>("read_exif", { path }),
   getSettings: () => invoke<AppSettings>("get_settings"),
   setSettings: (settings: AppSettings) => invoke<number>("set_settings", { settings }),
   getLaunchFile: () => invoke<string | null>("get_launch_file"),

@@ -1,5 +1,6 @@
 pub mod codecs;
 mod edit;
+mod exif;
 mod batch;
 mod scan;
 mod settings;
@@ -250,6 +251,7 @@ pub fn run() {
             batch::batch_convert,
             batch::batch_cancel,
             edit::edit_apply,
+            exif::read_exif,
             settings::get_settings,
             settings::set_settings,
             get_bench_config,

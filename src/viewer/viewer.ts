@@ -307,6 +307,29 @@ export class Viewer {
     this.updateVariantUi();
     this.prefetch(i);
     void this.loadFull(entry, token);
+    this.loadExif(entry);
+  }
+
+  /** 拍摄信息（EXIF）：懒加载，到达后若信息面板开着则刷新 */
+  private curExif: { path: string; info: import("../ipc").ExifInfo | null } | null = null;
+
+  private loadExif(entry: Entry): void {
+    // 仅 JPG/TIFF 有 EXIF（容品限制），其他格式直接置空
+    if (!["jpg", "jpeg", "tif", "tiff"].includes(entry.ext)) {
+      this.curExif = { path: entry.path, info: null };
+      return;
+    }
+    this.curExif = null;
+    void ipc
+      .readExif(entry.path)
+      .then((info) => {
+        if (this.cur?.path !== entry.path) return;
+        this.curExif = { path: entry.path, info };
+        if (this.infoVisible) this.draw();
+      })
+      .catch(() => {
+        if (this.cur?.path === entry.path) this.curExif = { path: entry.path, info: null };
+      });
   }
 
   /** 翻页/打开时图片 180ms 淡入 */
@@ -594,10 +617,33 @@ export class Viewer {
   private renderInfo(e: Entry, f: Frame): void {
     this.infoPanel.classList.remove("hidden");
     const pageInfo = f.pages && f.pages > 1 ? ` · 第 ${this.page + 1}/${f.pages} 页` : "";
+    const exif = this.curExif?.path === e.path ? this.curExif.info : null;
+    const photoRows: string[] = [];
+    if (exif) {
+      const camera = [exif.make, exif.model].filter(Boolean).join(" ");
+      if (camera) photoRows.push(camera);
+      if (exif.lens) photoRows.push(exif.lens);
+      const params = [
+        exif.focalLength,
+        exif.focalLength35mm,
+        exif.fNumber,
+        exif.exposure,
+        exif.iso ? `ISO ${exif.iso}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      if (params) photoRows.push(params);
+      if (exif.datetime) photoRows.push(exif.datetime);
+      if (exif.gps) photoRows.push(`📍 ${exif.gps}`);
+    }
+    const exifBlock = photoRows.length
+      ? `<div class="exif-sep"></div>${photoRows.map((r) => `<div class="row">${r}</div>`).join("")}`
+      : "";
     this.infoPanel.innerHTML = `
       <div class="row name">${e.name}</div>
       <div class="row">${f.naturalW} × ${f.naturalH} px · ${e.ext.toUpperCase()}${pageInfo}</div>
       <div class="row">${fmtSize(e.size)} · 缩放 ${Math.round(this.scale * 100)}%</div>
+      ${exifBlock}
       <div class="row dim">${e.path}</div>`;
   }
 

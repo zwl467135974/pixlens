@@ -855,3 +855,13 @@ body {
 :root[data-theme="light"] #settings-panel {
   background: rgba(255, 255, 255, .9);
 }
+
+/* ── 信息面板 EXIF 分隔 ── */
+.exif-sep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.14);
+  margin: 6px 0;
+}
+:root[data-theme="light"] .exif-sep {
+  background: rgba(0, 0, 0, 0.12);
+}
