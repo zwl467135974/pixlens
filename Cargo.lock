@@ -2669,6 +2669,7 @@ dependencies = [
 name = "psd-capi"
 version = "0.1.0"
 dependencies = [
+ "memmap2",
  "psd-codec",
 ]
 

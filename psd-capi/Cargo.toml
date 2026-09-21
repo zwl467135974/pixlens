@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 psd-codec = { path = "../crates/psd-codec", default-features = false }
+memmap2 = "0.5"
 # 无 image 依赖（DllHost 兼容）：JPEG 由 C++ 侧 GDI+ 解码
 
 [profile.release]
