@@ -1,5 +1,11 @@
 ; Tauri NSIS 安装钩子（doc/05 M7：卸载清理缓存目录；注册 PSD/PSB Explorer 缩略图 COM）
 !macro NSIS_HOOK_PREINSTALL
+  ; 释放被占用的文件：运行中的主程序，以及加载了缩略图 DLL 的 COM 代理进程
+  ; （DllHost 是无状态代理，Windows 会在下次请求时自动重启，可安全结束）
+  nsExec::ExecToLog 'taskkill /f /im pixlens.exe'
+  nsExec::ExecToLog 'taskkill /f /im dllhost.exe'
+  Pop $0
+  Sleep 500
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -15,6 +21,11 @@
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  ; 卸载也要先释放：DllHost 持有缩略图 DLL 时文件删不掉
+  nsExec::ExecToLog 'taskkill /f /im pixlens.exe'
+  nsExec::ExecToLog 'taskkill /f /im dllhost.exe'
+  Pop $0
+  Sleep 500
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

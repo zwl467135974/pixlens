@@ -2,6 +2,13 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.1.2（2026-09-21）
+
+- **修复升级安装被文件锁卡住**：浏览过 PSD 缩略图后 DllHost（COM 代理进程）
+  持有 pixlens_psd.dll，安装器无法覆盖——弹"无法打开需要写入的文件"。
+  PREINSTALL/PREUNINSTALL 钩子先结束 pixlens.exe 与 dllhost.exe
+  （DllHost 无状态，Windows 按需自动重启，安全）再拷贝/删除文件
+
 ## v1.1.1（2026-09-21）
 
 真实 Photoshop 文件缩略图修复（用户实测 4.36GB 工作目录反馈，桌面版同发）。
