@@ -556,7 +556,7 @@ body {
   right: 0;
   bottom: 0;
   width: 320px;
-  z-index: 60;
+  z-index: 200; /* 必须高于查看器(100)：编辑面板在查看器打开时使用 */
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
   display: flex;
@@ -659,7 +659,7 @@ body {
   top: 48px;
   right: 10px;
   width: 300px;
-  z-index: 60;
+  z-index: 200;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 10px;

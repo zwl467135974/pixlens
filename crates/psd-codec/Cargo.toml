@@ -1,0 +1,15 @@
+[package]
+name = "psd-codec"
+version = "0.1.0"
+edition = "2021"
+description = "PSD/PSB 解析器（PixLens 自研，应用与 Shell 缩略图扩展共用）"
+
+[features]
+rayon = ["dep:rayon"]
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+rayon = { version = "1", optional = true }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

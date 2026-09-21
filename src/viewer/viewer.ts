@@ -47,6 +47,8 @@ export class Viewer {
   private cropRectEl: HTMLElement;
   /** 裁剪框选模式（编辑器用） */
   private cropMode = false;
+  /** 编辑预览滤镜（ctx.filter / CSS filter 双路径共用） */
+  private previewFilter = "none";
   private cropAnchor: { x: number; y: number } | null = null;
   private cropCb: ((rect: { x1: number; y1: number; x2: number; y2: number }) => void) | null = null;
   private cropDragging = false;
@@ -187,11 +189,22 @@ export class Viewer {
     };
   }
 
-  /** 编辑预览：CSS filter（与 Rust 应用公式一致） */
+  /** 编辑预览：ctx.filter（Canvas 绘制路径）+ CSS filter（GIF 叠加层），与 Rust 应用公式一致 */
   setPreviewFilter(css: string): void {
-    const v = css === "none" ? "" : css;
-    this.canvas.style.filter = v;
-    this.gifLayer.style.filter = v;
+    this.previewFilter = css;
+    this.gifLayer.style.filter = css === "none" ? "" : css;
+    this.draw();
+  }
+
+  /** 编辑保存后刷新当前图（清 LRU 与全尺寸帧后重载，mtime 变化使缓存键更新） */
+  reloadCurrent(): void {
+    if (!this.cur) return;
+    const path = this.cur.path;
+    for (const k of [...this.lru.keys()]) {
+      if (k === path || k.startsWith(`${path}#`)) this.lru.delete(k);
+    }
+    this.fullFrame = null;
+    void this.show(this.idx);
   }
 
   /** 进入裁剪框选模式：拖拽出矩形后回调（屏幕坐标） */
@@ -275,7 +288,8 @@ export class Viewer {
 
     await this.getPreview(entry, this.page, this.exposure);
     if (token !== this.fullToken || this.cur?.path !== entry.path) return;
-    this.fit();
+    // 默认按原始大小显示（100%，不放大铺满）；适应窗口用 0 键/按钮/双击切换
+    this.one();
     this.draw();
     this.updateVariantUi();
     this.prefetch(i);
@@ -433,7 +447,9 @@ export class Viewer {
 
   rotate(deg: number): void {
     this.rot = (this.rot + deg + 360) % 360;
-    this.fit();
+    // 保持当前缩放，旋转后居中
+    this.offX = this.canvas.clientWidth / 2;
+    this.offY = this.canvas.clientHeight / 2;
     this.draw();
   }
 
@@ -461,6 +477,7 @@ export class Viewer {
     const dpr = window.devicePixelRatio || 1;
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.filter = "none";
     ctx.fillStyle = "#111116";
     ctx.fillRect(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
     if (!f || !entry) return;
@@ -478,6 +495,8 @@ export class Viewer {
       this.zoomLabel.textContent = `${Math.round(this.scale * 100)}%`;
     } else {
       this.gifLayer.classList.add("hidden");
+      // 编辑预览滤镜：只在绘制图像时启用（底色不受影响）
+      ctx.filter = this.previewFilter;
       ctx.translate(this.offX, this.offY);
       ctx.rotate((this.rot * Math.PI) / 180);
       const sx = this.flipH ? -this.scale : this.scale;
@@ -486,6 +505,7 @@ export class Viewer {
       // >100% 时关闭平滑（像素视图），<100% 时开启（缩小时抗锯齿）
       ctx.imageSmoothingEnabled = this.scale < 1;
       ctx.drawImage(f.src.bmp, -f.naturalW / 2, -f.naturalH / 2, f.naturalW, f.naturalH);
+      ctx.filter = "none";
       this.zoomLabel.textContent = `${Math.round(this.scale * 100)}%`;
     }
     if (this.infoVisible) this.renderInfo(entry, f);
@@ -677,10 +697,10 @@ export class Viewer {
     if (document.fullscreenElement) {
       await document.exitFullscreen();
     } else {
-      await this.root.requestFullscreen();
+      // 对整页全屏：编辑/设置等浮层面板在全屏下仍然可见
+      await document.documentElement.requestFullscreen();
     }
     this.resize();
-    this.fit();
     this.draw();
   }
 
@@ -690,7 +710,9 @@ export class Viewer {
   }
 
   private startSlideshow(): void {
-    if (!document.fullscreenElement) void this.root.requestFullscreen();
+    if (!document.fullscreenElement) {
+      void document.documentElement.requestFullscreen();
+    }
     this.slideshowTimer = window.setInterval(() => this.next(1), this.slideshowMs);
   }
 

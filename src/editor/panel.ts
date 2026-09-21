@@ -228,6 +228,10 @@ export class EditorPanel {
         quality,
       });
       this.resultBox.textContent = overwrite ? `已覆盖：${out}` : `已另存：${out}`;
+      if (overwrite) {
+        // 原图已变：清缓存重载当前图
+        this.viewer.reloadCurrent();
+      }
     } catch (e) {
       this.resultBox.textContent = `保存失败：${e}`;
     }

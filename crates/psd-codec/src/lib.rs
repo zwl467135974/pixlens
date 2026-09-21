@@ -8,6 +8,7 @@
 //! - 护栏：尺寸上限（PSD 30000 / PSB 300000）、全量像素 8 亿、全量缓冲 1.5GB、
 //!   行表与文件长度交叉校验；所有读取边界检查，损坏文件返回 Err 而非 panic
 
+#[cfg(feature = "rayon")]
 use rayon::prelude::*;
 
 // ── 错误 ─────────────────────────────
@@ -316,39 +317,50 @@ pub fn decode_composite(
     let raw_base = info.img_start + 2;
 
     let nplanes = base + usize::from(has_alpha);
-    // 采样行并行解码（行级粒度，rayon；输出按行切片并行写入）
+    // 采样行并行解码（行级粒度，rayon；no-rayon feature 下退化为串行——
+    // Shell 缩略图扩展在 COM 代理进程中使用，避免重量级依赖）
     let sampled: Vec<usize> = (0..h).step_by(step).collect();
     let mut buf = vec![0u8; ow.checked_mul(oh).and_then(|n| n.checked_mul(4)).ok_or_else(|| PsdError::TooLarge("输出缓冲溢出".into()))?];
     let row_stride = ow * 4;
+    let mut run_row = |planes: &mut Vec<Vec<u8>>, row_out: &mut [u8], y: usize| -> Result<(), PsdError> {
+        for (pi, plane) in planes.iter_mut().enumerate().take(nplanes) {
+            let row_index = pi * h + y;
+            match &row_loc {
+                None => {
+                    // Raw
+                    let start = raw_base
+                        .checked_add(row_index.checked_mul(row_bytes).ok_or(PsdError::Truncated)?)
+                        .ok_or(PsdError::Truncated)?;
+                    let end = start.checked_add(row_bytes).ok_or(PsdError::Truncated)?;
+                    let seg = data.get(start..end).ok_or(PsdError::Truncated)?;
+                    plane.copy_from_slice(seg);
+                }
+                Some(locs) => {
+                    let (start, len) = *locs.get(row_index).ok_or(PsdError::Truncated)?;
+                    let seg = data.get(start..start + len).ok_or(PsdError::Truncated)?;
+                    packbits_decode(seg, plane)?;
+                }
+            }
+        }
+        convert_row(planes, info, base, has_alpha, w, ow, step, exposure, row_out);
+        Ok(())
+    };
+    #[cfg(feature = "rayon")]
     let result: Result<(), PsdError> = buf
         .par_chunks_mut(row_stride)
         .zip(sampled.par_iter())
         .try_for_each_init(
             || vec![vec![0u8; row_bytes]; nplanes],
-            |planes: &mut Vec<Vec<u8>>, (row_out, &y)| {
-                for (pi, plane) in planes.iter_mut().enumerate().take(nplanes) {
-                    let row_index = pi * h + y;
-                    match &row_loc {
-                        None => {
-                            // Raw
-                            let start = raw_base
-                                .checked_add(row_index.checked_mul(row_bytes).ok_or(PsdError::Truncated)?)
-                                .ok_or(PsdError::Truncated)?;
-                            let end = start.checked_add(row_bytes).ok_or(PsdError::Truncated)?;
-                            let seg = data.get(start..end).ok_or(PsdError::Truncated)?;
-                            plane.copy_from_slice(seg);
-                        }
-                        Some(locs) => {
-                            let (start, len) = *locs.get(row_index).ok_or(PsdError::Truncated)?;
-                            let seg = data.get(start..start + len).ok_or(PsdError::Truncated)?;
-                            packbits_decode(seg, plane)?;
-                        }
-                    }
-                }
-                convert_row(&planes, info, base, has_alpha, w, ow, step, exposure, row_out);
-                Ok::<(), PsdError>(())
-            },
+            |planes: &mut Vec<Vec<u8>>, (row_out, &y)| run_row(planes, row_out, y),
         );
+    #[cfg(not(feature = "rayon"))]
+    let result: Result<(), PsdError> = (|| {
+        let mut planes = vec![vec![0u8; row_bytes]; nplanes];
+        for (row_out, &y) in buf.chunks_mut(row_stride).zip(sampled.iter()) {
+            run_row(&mut planes, row_out, y)?;
+        }
+        Ok(())
+    })();
     result?;
     let image = image::RgbaImage::from_raw(ow as u32, oh as u32, buf)
         .ok_or_else(|| PsdError::TooLarge("输出缓冲尺寸非法".into()))?;
@@ -380,7 +392,7 @@ fn convert_row(
             }
             32 => {
                 let b = plane.get(o..o + 4).map(|s| [s[0], s[1], s[2], s[3]]).unwrap_or([0; 4]);
-                crate::codecs::tone_map(f32::from_be_bytes(b), exposure)
+                tone_map(f32::from_be_bytes(b), exposure)
             }
             _ => 0,
         }
@@ -583,7 +595,7 @@ mod tests {
             match ch.depth {
                 8 => plane[o],
                 16 => plane[o],
-                32 => crate::codecs::tone_map(f32::from_be_bytes([
+                32 => tone_map(f32::from_be_bytes([
                     plane[o],
                     plane[o + 1],
                     plane[o + 2],
@@ -760,4 +772,11 @@ mod tests {
             assert_eq!(dec, src);
         }
     }
+}
+
+/// 线性 → sRGB 基础色调映射（带曝光系数）
+pub fn tone_map(v: f32, exposure: f32) -> u8 {
+    let v = (v * exposure).clamp(0.0, 1.0);
+    let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    (s * 255.0 + 0.5) as u8
 }

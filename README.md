@@ -9,17 +9,18 @@
 
 ## 当前状态
 
-**v1 完成（2026-09-20）**：M1~M7 全部里程碑交付并通过验收（见 `doc/验收记录.md`）——
-缩略图墙、Canvas 大图查看器、PSD/PSB 自研解析器、多页 TIFF、HDR 曝光、批量处理、基础编辑、
-NSIS 安装器（2.55MB）+ 文件关联 ×12 + 设置页。P1~P8/P11/P12 达标；P9/P10 应用进程达标（WebView2 运行时全树口径架构性超出，根因已归档）。
+**v1.1 完成（2026-09-21）**：M1~M7 全部里程碑 + 用户实测反馈修复（查看器默认 100% 原始大小、编辑面板遮挡/全屏可见/预览生效修复）+ **PSD/PSB 资源管理器缩略图预览**（C++ COM 壳 + Rust 解码核心 cdylib 双 DLL 架构，安装即生效）。详见 `doc/验收记录.md`。
 
 ## 构建与发布
 
 ```bash
 pnpm install                 # 前端依赖
 pnpm tauri dev               # 开发运行
-pnpm tauri build             # 产出 NSIS 安装器 target/release/bundle/nsis/
-cargo test -p pixlens        # 14 项单元测试
+cargo build -p psd-capi --release        # Rust 解码 cdylib（Shell 扩展核心）
+cmd /c shell-thumb-cpp\build.bat         # C++ 缩略图 COM DLL（依赖上面的 psd_capi.dll）
+cp target/release/psd_capi.dll target/release/pixlens_psd.dll
+pnpm tauri build             # 产出 NSIS 安装器 target/release/bundle/nsis/（含缩略图扩展）
+cargo test -p pixlens -p psd-codec        # 单元测试
 ```
 
 验收基准：`PIXLENS_BENCH=<图库> [PIXLENS_BENCH_CLEAR=1] [PIXLENS_BENCH_FULL=1] pixlens.exe`，

@@ -1,5 +1,12 @@
 [workspace]
-members = ["src-tauri", "tests/gen-lib", "tests/gen-psd"]
+members = [
+    "psd-capi",
+    "src-tauri",
+    "crates/psd-codec",
+
+    "tests/gen-lib",
+    "tests/gen-psd",
+]
 resolver = "2"
 
 [profile.release]

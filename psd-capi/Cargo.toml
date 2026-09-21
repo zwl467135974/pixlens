@@ -1,0 +1,16 @@
+[package]
+name = "psd-capi"
+version = "0.1.0"
+edition = "2021"
+description = "PSD/PSB 解码 C 接口（供 C++ Shell 缩略图扩展链接的 staticlib）"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+psd-codec = { path = "../crates/psd-codec", default-features = false }
+# 无 image 依赖（DllHost 兼容）：JPEG 由 C++ 侧 GDI+ 解码
+
+[profile.release]
+panic = "abort"
+opt-level = 2

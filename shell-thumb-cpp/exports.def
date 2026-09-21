@@ -1,0 +1,4 @@
+LIBRARY pixlens_thumb_cpp
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
