@@ -45,6 +45,8 @@ export class Viewer {
   private expSlider: HTMLInputElement;
   private expVal: HTMLElement;
   private cropRectEl: HTMLElement;
+  private hintEl: HTMLElement;
+  private hintTimer = 0;
   /** 裁剪框选模式（编辑器用） */
   private cropMode = false;
   /** 编辑预览滤镜（ctx.filter / CSS filter 双路径共用） */
@@ -111,6 +113,7 @@ export class Viewer {
         <button data-act="fit" title="适应窗口（0）">适应</button>
         <button data-act="100" title="100%（1）">100%</button>
         <span class="vsep"></span>
+        <button data-act="wallpaper" title="设为桌面壁纸">壁纸</button>
         <label id="viewer-exposure" class="vexp hidden" title="HDR 曝光">EV
           <input id="exposure-slider" type="range" min="-2" max="2" step="0.1" value="0" />
           <span id="exposure-val">0</span>
@@ -129,7 +132,8 @@ export class Viewer {
         <button data-act="close" title="关闭（Esc）">✕</button>
         <span id="viewer-zoom" class="zoom"></span>
       </div>
-      <div id="viewer-crop-rect" class="hidden"></div>`;
+      <div id="viewer-crop-rect" class="hidden"></div>
+      <div id="viewer-hint"></div>`;
     container.appendChild(root);
     this.root = root;
     this.canvas = root.querySelector("#viewer-canvas") as HTMLCanvasElement;
@@ -143,6 +147,7 @@ export class Viewer {
     this.expSlider = root.querySelector("#exposure-slider") as HTMLInputElement;
     this.expVal = root.querySelector("#exposure-val") as HTMLElement;
     this.cropRectEl = root.querySelector("#viewer-crop-rect") as HTMLElement;
+    this.hintEl = root.querySelector("#viewer-hint") as HTMLElement;
 
     this.bindInput();
     (root.querySelector("#viewer-bar") as HTMLElement).addEventListener("click", (ev) => {
@@ -725,6 +730,18 @@ export class Viewer {
       this.draw();
     });
 
+    // 鼠标侧键（前进/后退键）翻页
+    window.addEventListener("auxclick", (ev) => {
+      if (!this.open_) return;
+      if (ev.button === 3) {
+        ev.preventDefault();
+        this.next(-1);
+      } else if (ev.button === 4) {
+        ev.preventDefault();
+        this.next(1);
+      }
+    });
+
     window.addEventListener("keydown", (ev) => {
       if (!this.open_) return;
       const k = ev.key;
@@ -801,6 +818,7 @@ export class Viewer {
       case "fit": this.fit(); this.draw(); break;
       case "100": this.one(); this.draw(); break;
       case "fs": await this.toggleFullscreen(); break;
+      case "wallpaper": await this.setAsWallpaper(); break;
       case "slideshow": this.toggleSlideshow(); break;
       case "info":
         this.infoVisible = !this.infoVisible;
@@ -821,6 +839,46 @@ export class Viewer {
     }
     this.resize();
     this.draw();
+  }
+
+  /** 顶部轻提示（壁纸设置等异步操作反馈） */
+  private flashHint(text: string): void {
+    this.hintEl.textContent = text;
+    this.hintEl.classList.add("show");
+    window.clearTimeout(this.hintTimer);
+    this.hintTimer = window.setTimeout(() => this.hintEl.classList.remove("show"), 1800);
+  }
+
+  /** 当前图导出为屏幕分辨率 PNG 并设为壁纸（全格式统一走位图路径，含编辑预览滤镜） */
+  private async setAsWallpaper(): Promise<void> {
+    const f = this.effective();
+    if (!f) return;
+    this.flashHint("正在导出…");
+    try {
+      const dpr = window.devicePixelRatio || 1;
+      const maxDim = Math.max(window.screen.width, window.screen.height) * dpr;
+      const scale = Math.min(1, maxDim / Math.max(f.naturalW, f.naturalH));
+      const w = Math.max(1, Math.round(f.naturalW * scale));
+      const h = Math.max(1, Math.round(f.naturalH * scale));
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      const cx = c.getContext("2d")!;
+      cx.filter = this.previewFilter;
+      cx.drawImage(f.src.kind === "bitmap" ? f.src.bmp : f.src.img, 0, 0, w, h);
+      const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
+      if (!blob) throw new Error("导出失败");
+      const dataUrl = await new Promise<string>((r, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => r(fr.result as string);
+        fr.onerror = () => rej(fr.error);
+        fr.readAsDataURL(blob);
+      });
+      await ipc.setWallpaper(dataUrl.slice(dataUrl.indexOf(",") + 1));
+      this.flashHint("已设为桌面壁纸");
+    } catch (e) {
+      this.flashHint(`设置失败：${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   toggleSlideshow(): void {

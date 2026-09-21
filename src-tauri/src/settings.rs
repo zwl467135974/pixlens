@@ -16,6 +16,10 @@ pub struct Settings {
     pub default_sort: String,
     /// dark | light
     pub theme: String,
+    /// 窗口几何（Rust 侧维护，set_settings 合并保留）
+    pub window: Option<crate::window_state::WindowGeom>,
+    /// 上次浏览的文件夹（启动恢复）
+    pub last_folder: Option<String>,
 }
 
 impl Default for Settings {
@@ -24,6 +28,8 @@ impl Default for Settings {
             cache_limit_mb: 1024,
             default_sort: "name".into(),
             theme: "dark".into(),
+            window: None,
+            last_folder: None,
         }
     }
 }
@@ -40,7 +46,7 @@ pub fn load(app: &tauri::AppHandle) -> Settings {
         .unwrap_or_default()
 }
 
-fn save(app: &tauri::AppHandle, s: &Settings) -> Result<(), String> {
+pub(crate) fn save(app: &tauri::AppHandle, s: &Settings) -> Result<(), String> {
     let Some(p) = settings_path(app) else { return Err("配置目录不可用".into()) };
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -67,13 +73,28 @@ pub fn get_settings(app: tauri::AppHandle) -> Settings {
     load(&app)
 }
 
-/// 应用设置并即时生效（缓存上限原子更新 + 触发 LRU 淘汰），返回当前缓存占用 MB
+/// 记住上次浏览的文件夹（openFolder 时调用；变化才写盘）
+#[tauri::command]
+pub fn remember_folder(app: tauri::AppHandle, path: String) {
+    let mut s = load(&app);
+    if s.last_folder.as_deref() != Some(path.as_str()) {
+        s.last_folder = Some(path);
+        let _ = save(&app, &s);
+    }
+}
+
+/// 应用设置并即时生效（缓存上限原子更新 + 触发 LRU 淘汰），返回当前缓存占用 MB。
+/// 窗口几何/上次文件夹由 Rust 侧维护——前端传入的值不采纳，保留盘上现值。
 #[tauri::command]
 pub fn set_settings(app: tauri::AppHandle, state: tauri::State<crate::AppState>, settings: Settings) -> Result<f64, String> {
     validate(&settings)?;
-    let limit = settings.cache_limit_mb as u64 * 1024 * 1024;
+    let mut merged = load(&app);
+    merged.cache_limit_mb = settings.cache_limit_mb;
+    merged.default_sort = settings.default_sort;
+    merged.theme = settings.theme;
+    let limit = merged.cache_limit_mb as u64 * 1024 * 1024;
     state.thumb.max_cache_bytes.store(limit, Ordering::Relaxed);
-    save(&app, &settings)?;
+    save(&app, &merged)?;
     let dir = state.thumb.cache_dir.clone();
     crate::thumb::evict_if_needed(&dir, limit);
     Ok(dir_size_mb(&dir))

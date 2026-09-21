@@ -1,6 +1,7 @@
 /** 入口：装配 UI 事件、fs-changed 增量刷新、验收模式（doc/05 M1） */
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ipc, type AppSettings, type Entry, type FsChanged } from "./ipc";
 import { AppState, type SortDir, type SortKey } from "./state";
 import { Grid } from "./grid/grid";
@@ -108,6 +109,7 @@ async function openFolder(path?: string): Promise<void> {
   }
   if (typeof dir !== "string") return;
   currentFolder = dir;
+  void ipc.rememberFolder(dir); // 上次文件夹记忆（变化才写盘）
   showGrid();
   status("扫描中…");
   const res = await ipc.scanFolder(dir);
@@ -124,6 +126,28 @@ function applyView(keepScroll = true): void {
   grid.setEntries(state.view);
   if (keepScroll) els.grid.scrollTop = top;
   status();
+}
+
+/** 拖拽打开：文件夹 → 直接浏览；图片 → 打开所在文件夹并进查看器（与双击关联启动一致） */
+const IMG_EXTS = new Set([
+  "jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "avif", "svg", "tif", "tiff", "psd", "psb", "hdr",
+]);
+
+async function openDropped(paths: string[]): Promise<void> {
+  const first = paths.find((p) => p);
+  if (!first) return;
+  let dir: string;
+  let viewFile: string | null = null;
+  if (await ipc.pathIsDir(first)) {
+    dir = first;
+  } else {
+    const ext = first.slice(first.lastIndexOf(".") + 1).toLowerCase();
+    if (!IMG_EXTS.has(ext)) return; // 非图片文件：不响应，避免扫出空网格
+    dir = first.replace(/[\\/][^\\/]+$/, "");
+    viewFile = first;
+  }
+  await openFolder(dir);
+  if (viewFile && state.view.some((e) => e.path === viewFile)) viewer.open(viewFile);
 }
 
 function status(extra = ""): void {
@@ -173,6 +197,20 @@ function wireUi(): void {
       for (const e of state.view) selected.add(e.path);
       refreshSelection();
     }
+    // 空格快速预览：网格态打开查看器（悬停项 > 选中项 > 首项）；输入框中不响应
+    const tag = (ev.target as HTMLElement | null)?.tagName;
+    if (
+      ev.key === " " && currentFolder && !viewer.isOpen &&
+      tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA"
+    ) {
+      ev.preventDefault();
+      const firstSel = selected.size ? [...selected][0] : null;
+      const target =
+        grid.hoverEntry() ??
+        (firstSel ? state.view.find((e) => e.path === firstSel) : undefined) ??
+        state.view[0];
+      if (target) viewer.open(target.path);
+    }
   });
 
   els.sortKey.addEventListener("change", () => {
@@ -204,14 +242,32 @@ function wireUi(): void {
     status();
   });
 
+  // OS 级拖放（wry 拦截，HTML5 drop 不会触发）：enter/over 高亮，drop 打开
+  let dragHintOn = false;
+  void getCurrentWebviewWindow().onDragDropEvent((ev) => {
+    const p = ev.payload;
+    if (p.type === "enter" || p.type === "over") {
+      if (!dragHintOn) {
+        dragHintOn = true;
+        document.body.classList.add("drag-over");
+      }
+    } else if (p.type === "leave" || p.type === "drop") {
+      dragHintOn = false;
+      document.body.classList.remove("drag-over");
+      if (p.type === "drop") void openDropped(p.paths);
+    }
+  });
+
   void listen<FsChanged>("fs-changed", (ev) => patchFs(ev.payload));
 }
 
 async function boot(): Promise<void> {
   wireUi();
   // 启动即应用设置（主题 / 默认排序）
+  let bootSettings: AppSettings | null = null;
   try {
-    applySettings(await ipc.getSettings());
+    bootSettings = await ipc.getSettings();
+    applySettings(bootSettings);
   } catch {
     /* 默认深色 */
   }
@@ -240,6 +296,16 @@ async function boot(): Promise<void> {
     const dir = launch.replace(/[\\/][^\\/]+$/, "");
     await openFolder(dir);
     viewer.open(launch);
+    return;
+  }
+  // 恢复上次浏览的文件夹（存在且仍是目录才恢复）
+  const last = bootSettings?.lastFolder;
+  if (last && typeof last === "string" && last.length > 2) {
+    try {
+      if (await ipc.pathIsDir(last)) await openFolder(last);
+    } catch {
+      /* 忽略：保持欢迎页 */
+    }
   }
 }
 

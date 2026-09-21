@@ -6,6 +6,7 @@ mod scan;
 mod settings;
 mod thumb;
 mod viewer;
+mod window_state;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,8 @@ pub struct AppState {
     pub bench: Option<BenchConfig>,
     /// 双击关联文件启动时待打开的文件路径
     pub launch_file: Option<String>,
+    /// 最近一次普通（非最大化）窗口几何，关闭时落盘
+    pub geom: Mutex<Option<window_state::WindowGeom>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -92,6 +95,12 @@ fn get_launch_file(state: tauri::State<AppState>) -> Option<String> {
     state.launch_file.clone()
 }
 
+/// 拖拽打开：判定路径是文件夹还是文件（决定浏览文件夹或进查看器）
+#[tauri::command]
+fn path_is_dir(path: String) -> bool {
+    std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
+}
+
 #[tauri::command]
 fn bench_clear_cache(state: tauri::State<AppState>) -> Result<(), String> {
     thumb::wipe_cache(&state.thumb.cache_dir)
@@ -109,8 +118,57 @@ fn log_bench(metric: String, value: f64) {
     println!("[bench] {} = {:.1}", metric, value);
 }
 
-/// 进程树内存（字节）：应用 + WebView2 子进程（两级），P9/P10 测量用；
-/// 同时打印逐进程分解（定位内存构成）
+/// 设为桌面壁纸：接收前端导出的屏幕分辨率 PNG（base64，全格式统一走位图路径），
+/// 落盘到配置目录后 SystemParametersInfoW 生效（文件需持久保留供系统引用）
+#[tauri::command]
+fn set_wallpaper(app: tauri::AppHandle, png_b64: String) -> Result<(), String> {
+    use base64::Engine as _;
+    let b64 = png_b64.trim();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+    if !bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return Err("非 PNG 数据".into());
+    }
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("wallpaper.png");
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    set_wallpaper_win(&path)
+}
+
+#[cfg(windows)]
+fn set_wallpaper_win(path: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    const SPI_SETDESKWALLPAPER: u32 = 0x0014;
+    const SPIF_UPDATEINIFILE: u32 = 0x01;
+    const SPIF_SENDCHANGE: u32 = 0x02;
+    #[link(name = "user32")]
+    extern "system" {
+        fn SystemParametersInfoW(
+            action: u32,
+            uiparam: u32,
+            pvparam: *mut std::ffi::c_void,
+            winini: u32,
+        ) -> i32;
+    }
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let ok = unsafe {
+        SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, wide.as_mut_ptr().cast(), SPIF_UPDATEINIFILE | SPIF_SENDCHANGE)
+    };
+    if ok != 0 {
+        Ok(())
+    } else {
+        Err(format!("SystemParametersInfoW 失败: {}", std::io::Error::last_os_error()))
+    }
+}
+
+#[cfg(not(windows))]
+fn set_wallpaper_win(_: &std::path::Path) -> Result<(), String> {
+    Err("仅支持 Windows".into())
+}
+
+/// 进程树内存（字节）：应用 + WebView2 子进程（两级），P9/P10 测量用；/// 同时打印逐进程分解（定位内存构成）
 #[tauri::command]
 fn bench_memory() -> Result<u64, String> {
     let pid = std::process::id();
@@ -174,12 +232,29 @@ pub fn run() {
                 watcher: Mutex::new(None),
                 bench,
                 launch_file,
+                geom: Mutex::new(s.window),
             };
             // 启动时异步做一次 LRU 淘汰，防止缓存超限
             let dir = state.thumb.cache_dir.clone();
             let max = state.thumb.max_cache_bytes.load(std::sync::atomic::Ordering::Relaxed);
             std::thread::spawn(move || thumb::evict_if_needed(&dir, max));
             app.manage(state);
+
+            // 窗口几何记忆：setup 阶段恢复（早于首帧）；事件跟踪；关闭落盘
+            window_state::restore(app.handle());
+            window_state::track(app.handle()); // seed：未发生移动/缩放也有几何可存
+            if let Some(win) = app.get_webview_window("main") {
+                let app2 = app.handle().clone();
+                win.on_window_event(move |event| match event {
+                    tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                        window_state::track(&app2);
+                    }
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+                        window_state::persist(&app2);
+                    }
+                    _ => {}
+                });
+            }
             Ok(())
         })
         .register_asynchronous_uri_scheme_protocol("thumb", |ctx, request, responder| {
@@ -254,8 +329,11 @@ pub fn run() {
             exif::read_exif,
             settings::get_settings,
             settings::set_settings,
+            settings::remember_folder,
             get_bench_config,
             get_launch_file,
+            path_is_dir,
+            set_wallpaper,
             bench_clear_cache,
             bench_done,
             bench_memory,

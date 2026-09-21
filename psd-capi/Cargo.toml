@@ -2,16 +2,16 @@
 name = "psd-capi"
 version = "0.1.0"
 edition = "2021"
-description = "PSD/PSB 解码 C 接口（供 C++ Shell 缩略图扩展链接的 staticlib）"
+description = "PSD/PSB 解码 C 接口（C++ Shell 缩略图扩展动态加载的 cdylib，输出 pixlens_psd.dll）"
 
 [lib]
+# 产物名与 tauri.conf.json bundle.resources / C++ 壳 LoadLibrary 保持一致
+name = "pixlens_psd"
 crate-type = ["cdylib"]
 
 [dependencies]
 psd-codec = { path = "../crates/psd-codec", default-features = false }
 memmap2 = "0.5"
 # 无 image 依赖（DllHost 兼容）：JPEG 由 C++ 侧 GDI+ 解码
-
-[profile.release]
-panic = "abort"
-opt-level = 2
+# 注：profile 由 workspace 根 Cargo.toml 统一管理（panic=unwind，
+# 使 lib.rs 的 catch_unwind 兜底生效——panic 不至于带走 DllHost）

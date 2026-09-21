@@ -31,6 +31,9 @@ export interface AppSettings {
   cacheLimitMb: number;
   defaultSort: string;
   theme: string;
+  /** Rust 侧维护（窗口几何/上次文件夹），前端只读 */
+  window?: unknown;
+  lastFolder?: string | null;
 }
 
 export interface RenamePair {
@@ -111,6 +114,9 @@ export const ipc = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   setSettings: (settings: AppSettings) => invoke<number>("set_settings", { settings }),
   getLaunchFile: () => invoke<string | null>("get_launch_file"),
+  pathIsDir: (path: string) => invoke<boolean>("path_is_dir", { path }),
+  rememberFolder: (path: string) => invoke<void>("remember_folder", { path }),
+  setWallpaper: (pngB64: string) => invoke<void>("set_wallpaper", { pngB64 }),
   benchMemory: () => invoke<number>("bench_memory"),
 };
 

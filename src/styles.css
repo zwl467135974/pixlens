@@ -865,3 +865,52 @@ body {
 :root[data-theme="light"] .exif-sep {
   background: rgba(0, 0, 0, 0.12);
 }
+
+/* ── 拖拽打开提示层（OS 拖放入窗时） ── */
+body.drag-over::after {
+  content: "释放以打开";
+  position: fixed;
+  inset: 10px;
+  border: 2px dashed var(--accent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  letter-spacing: .2em;
+  color: var(--accent-hover);
+  z-index: 9999;
+  pointer-events: none;
+  animation: drop-hint-in .18s ease;
+}
+:root[data-theme="light"] body.drag-over::after {
+  color: var(--accent);
+}
+@keyframes drop-hint-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ── 查看器顶部轻提示（壁纸设置等） ── */
+#viewer-hint {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translate(-50%, -8px);
+  padding: 8px 18px;
+  border-radius: 10px;
+  background: rgba(20, 20, 26, .82);
+  border: 1px solid var(--border);
+  color: #e8e8f0;
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease, transform .2s cubic-bezier(.2,.8,.3,1.2);
+  z-index: 60;
+}
+#viewer-hint.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}

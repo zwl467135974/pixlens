@@ -1,6 +1,6 @@
 [package]
 name = "pixlens"
-version = "1.0.0"
+version = "1.1.0"
 description = "PixLens 图镜 — 免费轻快的本地看图软件"
 authors = ["Wyler"]
 edition = "2021"
@@ -39,3 +39,5 @@ rayon = "1"
 tiff = "0.11"
 psd-codec = { path = "../crates/psd-codec" }
 kamadak-exif = "0.5"
+# 壁纸：前端导出 PNG 的 base64 传输解码
+base64 = "0.22"

@@ -94,6 +94,12 @@ export class Grid {
     this.schedule();
   }
 
+  /** 当前悬停项（空格快速预览目标） */
+  hoverEntry(): Entry | null {
+    if (this.hoverIdx >= 0 && this.hoverIdx < this.entries.length) return this.entries[this.hoverIdx];
+    return null;
+  }
+
   scrollBy(px: number): void {
     this.el.scrollTop += px;
   }

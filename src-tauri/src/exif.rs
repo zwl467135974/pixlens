@@ -217,6 +217,3 @@ mod tests {
     }
 }
 
-__zcode_status=$?
-if [ "$__zcode_status" -eq 0 ]; then pwd -P > '/c/Users/GA/AppData/Local/Temp/zcode-9615d519-0ae3-43f6-9991-8464daaf62a5-cwd'; fi
-exit "$__zcode_status"
