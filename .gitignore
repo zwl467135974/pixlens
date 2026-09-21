@@ -25,3 +25,4 @@ Desktop.ini
 tests/out/
 src-tauri/icons/android/
 src-tauri/icons/ios/
+vc140.pdb
