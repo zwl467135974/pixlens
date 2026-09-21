@@ -21,8 +21,33 @@ fn main() {
         .map(|i| PathBuf::from(&args[i + 1]))
         .unwrap_or_else(|| PathBuf::from("tests/out/LIB-PSB"));
     let big = args.iter().any(|a| a == "--big");
+    let real = args.iter().any(|a| a == "--real");
+    if let Some(i) = args.iter().position(|a| a == "--probe") {
+        let data = std::fs::read(&args[i + 1]).expect("读取文件失败");
+        let info = psd::parse(&data).expect("解析失败");
+        println!(
+            "v{} mode={} ch={} depth={} {}x{} res={}..{} img@{}",
+            info.version, info.mode, info.channels, info.depth, info.width, info.height,
+            info.res_start, info.res_end, info.img_start
+        );
+        match psd::embedded_thumbnail(&data, &info) {
+            Some(j) => println!(
+                "embedded: {} bytes, head: {:02X?}",
+                j.len(),
+                &j[..j.len().min(8)]
+            ),
+            None => println!("embedded: NONE"),
+        }
+        println!("composite(256): {:?}", psd::decode_composite(&data, &info, 256, 1.0).map(|c| (c.width, c.height)));
+        return;
+    }
     std::fs::create_dir_all(&out).expect("创建输出目录失败");
     let thumb = make_thumb_jpeg();
+
+    if real {
+        write_real(&out, &thumb);
+        return;
+    }
 
     // 小样本矩阵
     let mut count = 0;
@@ -216,4 +241,107 @@ fn gen_row(r: usize, w: usize) -> Vec<u8> {
         row.push((s >> 56) as u8);
     }
     row
+}
+
+/// —— 真实 Photoshop 形态样本（--real）——
+/// 与合成样本的差异：1036 带 28 字节头、1036 前有其他资源块、CMYK 色彩模式。
+/// 用于复现真实文件在缩略图链路上的行为（v1.1.1 修复验证）。
+fn write_real(dir: &std::path::Path, jpeg: &[u8]) {
+    // 头式 1036 资源数据：28 字节头 + JFIF
+    let mut t = vec![0u8; 28];
+    t[0..4].copy_from_slice(&1u32.to_be_bytes()); // version = JPEG
+    t[4..8].copy_from_slice(&160u32.to_be_bytes());
+    t[8..12].copy_from_slice(&120u32.to_be_bytes());
+    t[12..16].copy_from_slice(&((28 + jpeg.len()) as u32).to_be_bytes());
+    t[16..20].copy_from_slice(&(jpeg.len() as u32).to_be_bytes());
+    t.extend_from_slice(jpeg);
+
+    let mut res = Vec::new();
+    // 前置资源块 1005（奇数长 Pascal 名，检验补齐）
+    push_resource(&mut res, 1, 1005, b"desc\x00", b"pixlens probe");
+    push_resource(&mut res, 1, 1036, b"", &t);
+
+    // 1) RGB8 RLE + 头式 1036（真实 Photoshop 最常见形态）
+    let ch = sample_channels(200, 120, 3, 8);
+    write_real_file(&dir.join("real_thumb_hdr.psd"), &ch, 1, &res);
+    // 2) CMYK8 RLE 无缩略图（逼出 CMYK 合成路径）
+    let mut cmyk = sample_channels(160, 90, 4, 8);
+    cmyk.mode = 4;
+    write_real_file(&dir.join("real_cmyk_rle.psd"), &cmyk, 1, &[]);
+    // 3) CMYK8 RLE + 头式 1036（PSB）
+    let mut res2 = Vec::new();
+    push_resource(&mut res2, 2, 1036, b"", &t);
+    write_real_file(&dir.join("real_cmyk_thumb_hdr.psb"), &cmyk, 2, &res2);
+    // 4) RGB16 RLE + 头式 1036
+    let ch16 = sample_channels(200, 120, 4, 16);
+    write_real_file(&dir.join("real_rgb16_thumb_hdr.psd"), &ch16, 1, &res);
+    println!("真实形态样本 4 个 → {}", dir.display());
+}
+
+fn push_resource(out: &mut Vec<u8>, version: u16, id: u16, name: &[u8], data: &[u8]) {
+    out.extend_from_slice(b"8BIM");
+    out.extend_from_slice(&id.to_be_bytes());
+    // Pascal 名：长度字节 + 字符，整体补齐到偶数（空名 = 2 字节）
+    out.push(name.len() as u8);
+    out.extend_from_slice(name);
+    if (1 + name.len()) % 2 == 1 {
+        out.push(0);
+    }
+    let len_field: Vec<u8> = if version == 2 {
+        (data.len() as u64).to_be_bytes().to_vec()
+    } else {
+        (data.len() as u32).to_be_bytes().to_vec()
+    };
+    out.extend_from_slice(&len_field);
+    out.extend_from_slice(data);
+    if data.len() % 2 == 1 {
+        out.push(0);
+    }
+}
+
+/// 手工拼装（encode_psd 不支持自定义资源段）：头 + 空颜色模式 + 资源 + 空图层段 + RLE 图像数据
+fn write_real_file(path: &std::path::Path, ch: &PsdChannels, version: u16, res: &[u8]) {
+    let ls = if version == 2 { 8 } else { 4 };
+    let mut out = Vec::new();
+    out.extend_from_slice(b"8BPS");
+    out.extend_from_slice(&version.to_be_bytes());
+    out.extend_from_slice(&[0u8; 6]);
+    out.extend_from_slice(&(ch.planes.len() as u16).to_be_bytes());
+    out.extend_from_slice(&ch.height.to_be_bytes());
+    out.extend_from_slice(&ch.width.to_be_bytes());
+    out.extend_from_slice(&ch.depth.to_be_bytes());
+    out.extend_from_slice(&ch.mode.to_be_bytes());
+    out.extend_from_slice(&vec![0u8; ls]); // 颜色模式数据：空
+    if version == 2 {
+        out.extend_from_slice(&(res.len() as u64).to_be_bytes());
+    } else {
+        out.extend_from_slice(&(res.len() as u32).to_be_bytes());
+    }
+    out.extend_from_slice(res);
+    out.extend_from_slice(&vec![0u8; ls]); // 图层与蒙版：空
+    out.extend_from_slice(&1u16.to_be_bytes()); // RLE
+    let w = ch.width as usize;
+    let h = ch.height as usize;
+    let row_bytes = w * (ch.depth as usize / 8);
+    let mut table: Vec<u32> = Vec::new();
+    let mut rows: Vec<Vec<u8>> = Vec::new();
+    for plane in &ch.planes {
+        for y in 0..h {
+            let mut pr = Vec::new();
+            psd::packbits_encode(&plane[y * row_bytes..(y + 1) * row_bytes], &mut pr);
+            table.push(pr.len() as u32);
+            rows.push(pr);
+        }
+    }
+    for t in &table {
+        if version == 2 {
+            out.extend_from_slice(&t.to_be_bytes());
+        } else {
+            out.extend_from_slice(&(*t as u16).to_be_bytes());
+        }
+    }
+    for pr in rows {
+        out.extend_from_slice(&pr);
+    }
+    std::fs::write(path, out).expect("写入样本失败");
 }

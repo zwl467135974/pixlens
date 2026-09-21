@@ -27,6 +27,11 @@ typedef int (*FnCompositeRgbaFile)(const char* path, unsigned cx,
                                    unsigned char* out, size_t cap, unsigned* w, unsigned* h);
 typedef int (*FnCompositeRgbaMem)(const unsigned char* data, size_t len, unsigned cx,
                                    unsigned char* out, size_t cap, unsigned* w, unsigned* h);
+// 流式合成：head 前缀 + C 回调（IStream seek/read）按需读采样行
+typedef int (*FnCompositeRgbaStream)(const unsigned char* head, size_t head_len, unsigned long long total,
+                                     void* ctx, int (*seek)(void*, unsigned long long),
+                                     int (*read)(void*, unsigned char*, size_t),
+                                     unsigned cx, unsigned char* out, size_t cap, unsigned* w, unsigned* h);
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -34,9 +39,10 @@ static FnEmbeddedJpegFile g_fn_embedded = nullptr;
 static FnEmbeddedJpegMem g_fn_embedded_mem = nullptr;
 static FnCompositeRgbaFile g_fn_composite = nullptr;
 static FnCompositeRgbaMem g_fn_composite_mem = nullptr;
+static FnCompositeRgbaStream g_fn_composite_stream = nullptr;
 
 static bool loadRustLib() {
-    if (g_fn_composite) return true;
+    if (g_fn_composite_stream) return true;
     // 与本 DLL 同目录的 pixlens_psd.dll
     wchar_t path[MAX_PATH];
     DWORD n = GetModuleFileNameW((HMODULE)&__ImageBase, path, MAX_PATH);
@@ -50,18 +56,34 @@ static bool loadRustLib() {
     g_fn_composite = (FnCompositeRgbaFile)GetProcAddress(h, "pixlens_psd_composite_rgba_from_file");
     g_fn_embedded_mem = (FnEmbeddedJpegMem)GetProcAddress(h, "pixlens_psd_embedded_jpeg");
     g_fn_composite_mem = (FnCompositeRgbaMem)GetProcAddress(h, "pixlens_psd_composite_rgba");
-    return g_fn_composite != nullptr && g_fn_embedded_mem != nullptr;
+    g_fn_composite_stream = (FnCompositeRgbaStream)GetProcAddress(h, "pixlens_psd_composite_rgba_stream");
+    return g_fn_composite != nullptr && g_fn_embedded_mem != nullptr && g_fn_composite_stream != nullptr;
 }
 
-// GDI+ 一次性初始化
-struct GdiplusInit {
-    ULONG_PTR token;
-    GdiplusInit() {
-        Gdiplus::GdiplusStartupInput si;
-        Gdiplus::GdiplusStartup(&token, &si, nullptr);
-    }
-    ~GdiplusInit() { Gdiplus::GdiplusShutdown(token); }
-};
+// GDI+ 惰性一次性初始化（C++11 magic static 线程安全；勿在 DllMain 阶段做）
+static void ensure_gdiplus() {
+    struct GdiplusInit {
+        ULONG_PTR token;
+        GdiplusInit() {
+            Gdiplus::GdiplusStartupInput si;
+            Gdiplus::GdiplusStartup(&token, &si, nullptr);
+        }
+        ~GdiplusInit() { Gdiplus::GdiplusShutdown(token); }
+    };
+    static GdiplusInit init;
+}
+
+// IStream → Rust 字节源回调（绝对定位 / 读满；IStream 非线程安全，仅串行调用）
+static int istream_seek_cb(void* ctx, unsigned long long pos) {
+    LARGE_INTEGER li;
+    memcpy(&li, &pos, sizeof(li));
+    return SUCCEEDED(((IStream*)ctx)->Seek(li, STREAM_SEEK_SET, nullptr)) ? 0 : -1;
+}
+static int istream_read_cb(void* ctx, unsigned char* buf, size_t len) {
+    ULONG got = 0;
+    if (len > 0xFFFFFFFFull) return -1;
+    return SUCCEEDED(((IStream*)ctx)->Read(buf, (ULONG)len, &got)) && got == len ? 0 : -1;
+}
 
 // ── CLSID（与注册表/nsis-hooks 一致，勿改） ─────────────
 // {2B2E7C27-BC52-4521-9A56-87BC2DFC7639}
@@ -79,10 +101,15 @@ class ThumbnailProvider : public IThumbnailProvider,
                           public IInitializeWithItem {
     LONG m_rc;
     std::vector<char> m_path; // UTF-8 文件路径（File/Item 初始化）
-    std::vector<unsigned char> m_data; // stream 数据（≤512MB 截断）
+    std::vector<unsigned char> m_data; // 文件头部（stream 初始化截断 2MB / path 初始化读 2MB）
+    IStream* m_stream = nullptr; // stream 模式持有的流引用（合成图 seek 采样用）
+    unsigned long long m_total = 0; // 完整文件长度（STATSTG）
 
 public:
     ThumbnailProvider() : m_rc(1) {}
+    ~ThumbnailProvider() {
+        if (m_stream) m_stream->Release();
+    }
 
     // IUnknown
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
@@ -111,18 +138,24 @@ public:
 
     // IInitializeWithStream（Shell 绑定必需；读流缓冲必须堆分配——DllHost 的
     // COM 线程栈小，大栈数组触发 __chkstk 栈溢出，此前所有版本崩溃的根因）。
-    // 截断上限 512MB：避免 DllHost 为单个缩略图提交 GB 级内存；超限文件头部
-    // 的 1036 内嵌缩略图仍可用（资源段位于文件前部）。
+    // 只读 2MB 头部（1036 内嵌缩略图 + 段定位字段都在前部），流引用保留给
+    // 合成图 seek 采样——任意大小文件都有界内存，不再整流读入。
     STDMETHODIMP Initialize(IStream* stream, DWORD) override {
         if (!stream) return E_FAIL;
         try {
+            STATSTG stg = {};
+            if (FAILED(stream->Stat(&stg, STATFLAG_NONAME))) return E_FAIL;
+            m_total = stg.cbSize.QuadPart;
+            stream->AddRef();
+            if (m_stream) m_stream->Release();
+            m_stream = stream;
             m_data.clear();
-            const size_t CAP = (size_t)512 * 1024 * 1024;
+            const size_t HEAD = (size_t)2 << 20;
             std::vector<unsigned char> buf(1 << 20);
             ULONG n = 0;
             for (;;) {
-                if (m_data.size() >= CAP) break;
-                size_t want = buf.size() < CAP - m_data.size() ? buf.size() : CAP - m_data.size();
+                if (m_data.size() >= HEAD || m_data.size() >= m_total) break;
+                size_t want = buf.size() < HEAD - m_data.size() ? buf.size() : HEAD - m_data.size();
                 HRESULT hr = stream->Read(buf.data(), (ULONG)want, &n);
                 if (FAILED(hr)) return hr;
                 if (n == 0) break;
@@ -163,6 +196,7 @@ public:
         if (!phbmp || !pdwAlpha) return E_FAIL;
         try {
             if (!loadRustLib()) return E_FAIL;
+            ensure_gdiplus();
 
             // 头部数据视图（指针引用，不拷贝）：m_path 时读文件头 2MB，否则用
             // stream 数据——1036 内嵌缩略图位于文件头部资源段，2MB 覆盖绝大多数文件
@@ -207,15 +241,20 @@ public:
                 }
             }
 
-            // 2) 合成图跨步解码：路径模式 mmap 任意大小；stream 模式仅当数据完整
+            // 2) 合成图跨步解码：路径模式 mmap 任意大小；stream 模式经 seek 回调
+            //    只读采样行（2GB PSB 也只触碰几 MB，替代整流读入）
             const size_t cap = (size_t)cx * cx * 4;
             std::vector<unsigned char> rgba(cap);
             unsigned w = 0, h = 0;
             int cres = -1;
             if (!m_path.empty()) {
                 cres = g_fn_composite(m_path.data(), cx, rgba.data(), cap, &w, &h);
-            } else {
-                cres = g_fn_composite_mem(head, headLen, cx, rgba.data(), cap, &w, &h);
+            } else if (m_stream && g_fn_composite_stream) {
+                cres = g_fn_composite_stream(m_data.data(), m_data.size(), m_total,
+                                             m_stream, istream_seek_cb, istream_read_cb,
+                                             cx, rgba.data(), cap, &w, &h);
+            } else if (!m_data.empty() && m_data.size() >= m_total) {
+                cres = g_fn_composite_mem(m_data.data(), m_data.size(), cx, rgba.data(), cap, &w, &h);
             }
             if (cres != 0) return E_FAIL;
 

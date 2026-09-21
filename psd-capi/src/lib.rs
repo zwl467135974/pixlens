@@ -16,6 +16,36 @@ fn guarded<F: FnOnce() -> i32>(f: F) -> i32 {
     panic::catch_unwind(AssertUnwindSafe(f)).unwrap_or(-100)
 }
 
+/// C 侧字节源回调：seek 绝对定位（0 成功），read 读满缓冲（0 成功）
+pub type CbSeek = unsafe extern "C" fn(ctx: *mut std::ffi::c_void, pos: u64) -> i32;
+pub type CbRead = unsafe extern "C" fn(ctx: *mut std::ffi::c_void, buf: *mut u8, len: usize) -> i32;
+
+struct StreamSource {
+    ctx: *mut std::ffi::c_void,
+    seek: CbSeek,
+    read: CbRead,
+}
+
+// 回调只在本线程内串行使用（IStream 非线程安全，psd-codec 流式路径为串行）
+unsafe impl Send for StreamSource {}
+
+impl psd_codec::ByteSource for StreamSource {
+    fn pread(&mut self, off: u64, out: &mut [u8]) -> Result<(), psd_codec::PsdError> {
+        if out.is_empty() {
+            return Ok(());
+        }
+        unsafe {
+            if (self.seek)(self.ctx, off) != 0 {
+                return Err(psd_codec::PsdError::Truncated);
+            }
+            if (self.read)(self.ctx, out.as_mut_ptr(), out.len()) != 0 {
+                return Err(psd_codec::PsdError::Truncated);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// 提取内嵌缩略图 JPEG（1036）原始字节（mmap 版）。
 /// 返回：0=未找到；>0=写出的字节数（截断到 out_cap）；<0=失败
 #[no_mangle]
@@ -70,6 +100,52 @@ pub extern "C" fn pixlens_psd_composite_rgba_from_file(
         let need = (w as usize) * (h as usize) * 4;
         if out_rgba.is_null() || out_w.is_null() || out_h.is_null() || out_cap < need {
             return -5;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(comp.image.as_raw().as_ptr(), out_rgba, need);
+            *out_w = w;
+            *out_h = h;
+        }
+        0
+    })
+}
+
+/// 流式合成解码：head 为文件前部（parse_prefix 用，≥2MB 覆盖绝大多数），
+/// total 为完整文件长度，行数据经 C 回调按需读取（IStream seek/read）——
+/// 任意大小文件有界内存，替代"整流读入"路径。0 成功；负值失败。
+#[no_mangle]
+pub extern "C" fn pixlens_psd_composite_rgba_stream(
+    head: *const u8,
+    head_len: usize,
+    total: u64,
+    ctx: *mut std::ffi::c_void,
+    seek: CbSeek,
+    read: CbRead,
+    cx: u32,
+    out_rgba: *mut u8,
+    out_cap: usize,
+    out_w: *mut u32,
+    out_h: *mut u32,
+) -> i32 {
+    guarded(|| {
+        if head.is_null() || out_rgba.is_null() || out_w.is_null() || out_h.is_null()
+            || head_len == 0 || cx == 0 || ctx.is_null() {
+            return -1;
+        }
+        let head = unsafe { std::slice::from_raw_parts(head, head_len) };
+        let info = match psd_codec::parse_prefix(head, total) {
+            Ok(i) => i,
+            Err(_) => return -2,
+        };
+        let mut src = StreamSource { ctx, seek, read };
+        let comp = match psd_codec::decode_composite_source(&mut src, &info, cx, 1.0) {
+            Ok(c) => c,
+            Err(_) => return -3,
+        };
+        let (w, h) = comp.image.dimensions();
+        let need = (w as usize) * (h as usize) * 4;
+        if out_cap < need {
+            return -4;
         }
         unsafe {
             std::ptr::copy_nonoverlapping(comp.image.as_raw().as_ptr(), out_rgba, need);

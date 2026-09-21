@@ -86,22 +86,28 @@ fn len_size(version: u16) -> usize {
 }
 
 pub fn parse(data: &[u8]) -> Result<PsdInfo, PsdError> {
-    if data.len() < 26 {
+    parse_prefix(data, data.len() as u64)
+}
+
+/// 前缀解析：头部字段从 head 读取，段范围按 total（完整文件长度）校验——
+/// 供流式路径使用（只持有文件前部，合成数据经字节源按需读取）
+pub fn parse_prefix(d: &[u8], total: u64) -> Result<PsdInfo, PsdError> {
+    if d.len() < 26 {
         return Err(PsdError::Truncated);
     }
-    if &data[0..4] != b"8BPS" {
+    if &d[0..4] != b"8BPS" {
         return Err(PsdError::BadSignature);
     }
-    let version = u16be(data, 4)?;
+    let version = u16be(d, 4)?;
     if version != 1 && version != 2 {
         return Err(PsdError::BadVersion(version));
     }
     // 6..12 保留字节：真实文件可能非零，跳过不校验
-    let channels = u16be(data, 12)?;
-    let height = u32be(data, 14)?;
-    let width = u32be(data, 18)?;
-    let depth = u16be(data, 22)?;
-    let mode = u16be(data, 24)?;
+    let channels = u16be(d, 12)?;
+    let height = u32be(d, 14)?;
+    let width = u32be(d, 18)?;
+    let depth = u16be(d, 22)?;
+    let mode = u16be(d, 24)?;
     if channels == 0 || channels > 56 {
         return Err(PsdError::Unsupported("通道数非法".into()));
     }
@@ -118,16 +124,15 @@ pub fn parse(data: &[u8]) -> Result<PsdInfo, PsdError> {
 
     let ls = len_size(version);
     let mut off: u64 = 26;
-    let total = data.len() as u64;
 
     // 颜色模式数据段（跳过）
-    let color_len = read_len(data, off as usize, version)?;
+    let color_len = read_len(d, off as usize, version)?;
     off += ls as u64 + color_len;
     if off > total {
         return Err(PsdError::Truncated);
     }
     // 图像资源段
-    let res_len = read_len(data, off as usize, version)?;
+    let res_len = read_len(d, off as usize, version)?;
     let res_start = (off + ls as u64) as usize;
     let res_end = (off + ls as u64 + res_len) as usize;
     off += ls as u64 + res_len;
@@ -135,14 +140,14 @@ pub fn parse(data: &[u8]) -> Result<PsdInfo, PsdError> {
         return Err(PsdError::Truncated);
     }
     // 图层与蒙版段（v1 整体跳过）
-    let layer_len = read_len(data, off as usize, version)?;
+    let layer_len = read_len(d, off as usize, version)?;
     off += ls as u64 + layer_len;
     if off > total {
         return Err(PsdError::Truncated);
     }
     // 图像数据段
     let img_start = off as usize;
-    if img_start + 2 > data.len() {
+    if img_start as u64 + 2 > total {
         return Err(PsdError::Truncated);
     }
 
@@ -160,7 +165,7 @@ pub fn parse(data: &[u8]) -> Result<PsdInfo, PsdError> {
 }
 
 // ── 1036 内嵌缩略图快路径 ───────────────
-/// 扫图像资源段提取 1036（JFIF JPEG）；资源段损坏时返回 None（快路径可失败，走合成图）
+/// 扫图像资源段提取 1036 JPEG 流；资源段损坏时返回 None（快路径可失败，走合成图）
 pub fn embedded_thumbnail(data: &[u8], info: &PsdInfo) -> Option<Vec<u8>> {
     let end = info.res_end.min(data.len());
     let mut off = info.res_start;
@@ -180,11 +185,21 @@ pub fn embedded_thumbnail(data: &[u8], info: &PsdInfo) -> Option<Vec<u8>> {
         let dstart = p.checked_add(len_size(info.version))?;
         let dend = dstart.checked_add(dlen)?;
         if id == 1036 {
-            return data.get(dstart..dend.min(data.len())).map(|s| s.to_vec());
+            let res = data.get(dstart..dend.min(data.len()))?;
+            return jpeg_stream(res).map(|s| s.to_vec());
         }
         off = dend + (dlen % 2); // 资源数据同样补齐到偶数
     }
     None
+}
+
+/// 真实 Photoshop 的 1036 资源带 28 字节头（version/宽/高/尺寸等字段），JPEG 从 SOI 起；
+/// 自产样本为无头格式。在资源前 64 字节内扫描 SOI（FFD8FF）定位实际 JPEG 流，
+/// 两种形态统一兼容；找不到 SOI（如 version=2 的 1bpp 原始位图缩略图）则放弃。
+fn jpeg_stream(res: &[u8]) -> Option<&[u8]> {
+    let n = res.len().min(64);
+    let start = res[..n].windows(3).position(|w| w == [0xFF, 0xD8, 0xFF])?;
+    res.get(start..)
 }
 
 // ── 合成图解码 ─────────────────────
@@ -240,10 +255,11 @@ pub fn decode_composite(
     max_dim: u32,
     exposure: f32,
 ) -> Result<Composite, PsdError> {
-    // v1 仅支持灰度(1) / RGB(3)；CMYK/Lab/索引等显示占位
+    // 灰度(1) / RGB(3) / CMYK(4，朴素还原)；Lab/索引等显示占位
     let base = match info.mode {
         1 => 1usize,
         3 => 3usize,
+        4 => 4usize,
         m => return Err(PsdError::UnsupportedMode(m)),
     };
     match info.depth {
@@ -368,6 +384,134 @@ pub fn decode_composite(
     Ok(Composite { width: info.width, height: info.height, image })
 }
 
+// ── 字节源（流式合成：只按需读取采样行，任意大小文件有界内存） ─────
+pub trait ByteSource {
+    /// 从绝对偏移 off 读取 out.len() 字节并填满（不足即 Err）
+    fn pread(&mut self, off: u64, out: &mut [u8]) -> Result<(), PsdError>;
+}
+
+/// 切片字节源（内存/完整 mmap）
+pub struct SliceSource<'a>(pub &'a [u8]);
+
+impl ByteSource for SliceSource<'_> {
+    fn pread(&mut self, off: u64, out: &mut [u8]) -> Result<(), PsdError> {
+        let start = off as usize;
+        let end = start.checked_add(out.len()).ok_or(PsdError::Truncated)?;
+        let seg = self.0.get(start..end).ok_or(PsdError::Truncated)?;
+        out.copy_from_slice(seg);
+        Ok(())
+    }
+}
+
+/// 流式合成解码（串行）：info 经 parse_prefix 从文件前部获得，
+/// 行表与采样行数据经 ByteSource 按需读取——2GB PSB 也只触碰采样页。
+/// 语义与 decode_composite（max_dim 跨步采样）一致。
+pub fn decode_composite_source(
+    src: &mut dyn ByteSource,
+    info: &PsdInfo,
+    max_dim: u32,
+    exposure: f32,
+) -> Result<Composite, PsdError> {
+    let base = match info.mode {
+        1 => 1usize,
+        3 => 3usize,
+        4 => 4usize,
+        m => return Err(PsdError::UnsupportedMode(m)),
+    };
+    match info.depth {
+        8 | 16 | 32 => {}
+        1 => return Err(PsdError::Unsupported("位图模式暂不支持".into())),
+        d => return Err(PsdError::UnsupportedDepth(d)),
+    }
+    let nch = info.channels as usize;
+    if nch < base {
+        return Err(PsdError::Unsupported("通道数不足".into()));
+    }
+    let has_alpha = nch > base;
+
+    let w = info.width as usize;
+    let h = info.height as usize;
+    let bps = info.depth as usize / 8;
+    let row_bytes = w.checked_mul(bps).ok_or_else(|| PsdError::TooLarge("行字节数溢出".into()))?;
+
+    let step = if max_dim > 0 && w.max(h) > max_dim as usize {
+        ((w.max(h) as f64 / max_dim as f64).ceil() as usize).max(1)
+    } else {
+        1
+    };
+    let ow = (w + step - 1) / step;
+    let oh = (h + step - 1) / step;
+
+    if step == 1 {
+        let px = w as u64 * h as u64;
+        if px > 800_000_000 {
+            return Err(PsdError::TooLarge(format!("{px} 像素")));
+        }
+        if px * 4 > 1_500_000_000 {
+            return Err(PsdError::TooLarge(format!("{} GB 缓冲", px * 4 / 1_000_000_000)));
+        }
+    }
+
+    let mut compression_buf = [0u8; 2];
+    src.pread(info.img_start as u64, &mut compression_buf)?;
+    let compression = u16::from_be_bytes(compression_buf);
+    let rows_total = h.checked_mul(nch).ok_or_else(|| PsdError::TooLarge("行数溢出".into()))?;
+
+    // RLE：读行表并交叉校验累计偏移
+    let row_loc: Option<Vec<(u64, usize)>> = match compression {
+        0 => None,
+        1 => {
+            let ent = if info.version == 2 { 4 } else { 2 };
+            let tbl = info.img_start as u64 + 2;
+            let mut table = vec![0u8; rows_total * ent];
+            src.pread(tbl, &mut table)?;
+            let mut offs = Vec::with_capacity(rows_total);
+            let mut cur = tbl + rows_total as u64 * ent as u64;
+            for i in 0..rows_total {
+                let rl = if info.version == 2 {
+                    u32be(&table, i * ent)? as u64
+                } else {
+                    u16be(&table, i * ent)? as u64
+                };
+                offs.push((cur, rl as usize));
+                cur = cur.checked_add(rl).ok_or(PsdError::Truncated)?;
+            }
+            Some(offs)
+        }
+        c => return Err(PsdError::UnsupportedCompression(c)),
+    };
+    let raw_base = info.img_start as u64 + 2;
+
+    let nplanes = base + usize::from(has_alpha);
+    let sampled: Vec<usize> = (0..h).step_by(step).collect();
+    let mut buf = vec![0u8; ow.checked_mul(oh).and_then(|n| n.checked_mul(4)).ok_or_else(|| PsdError::TooLarge("输出缓冲溢出".into()))?];
+    let row_stride = ow * 4;
+    let mut planes = vec![vec![0u8; row_bytes]; nplanes];
+    for (row_out, &y) in buf.chunks_mut(row_stride).zip(sampled.iter()) {
+        for (pi, plane) in planes.iter_mut().enumerate().take(nplanes) {
+            let row_index = pi * h + y;
+            match &row_loc {
+                None => {
+                    let off = raw_base
+                        .checked_add(row_index as u64 * row_bytes as u64)
+                        .ok_or(PsdError::Truncated)?;
+                    src.pread(off, plane)?;
+                }
+                Some(locs) => {
+                    let (start, len) = *locs.get(row_index).ok_or(PsdError::Truncated)?;
+                    let mut seg = vec![0u8; len];
+                    src.pread(start, &mut seg)?;
+                    packbits_decode(&seg, plane)?;
+                }
+            }
+        }
+        convert_row(&planes, info, base, has_alpha, w, ow, step, exposure, row_out);
+    }
+    let image = image::RgbaImage::from_raw(ow as u32, oh as u32, buf)
+        .ok_or_else(|| PsdError::TooLarge("输出缓冲尺寸非法".into()))?;
+    Ok(Composite { width: info.width, height: info.height, image })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn convert_row(
     planes: &[Vec<u8>],
@@ -406,6 +550,16 @@ fn convert_row(
                 out_row[idx] = g;
                 out_row[idx + 1] = g;
                 out_row[idx + 2] = g;
+            }
+            // CMYK 朴素还原（无 ICC，近似观感）：R = 255 - min(255, C+K)
+            4 => {
+                let c = sample(&planes[0], x) as u16;
+                let m = sample(&planes[1], x) as u16;
+                let y = sample(&planes[2], x) as u16;
+                let k = sample(&planes[3], x) as u16;
+                out_row[idx] = 255 - (c + k).min(255) as u8;
+                out_row[idx + 1] = 255 - (m + k).min(255) as u8;
+                out_row[idx + 2] = 255 - (y + k).min(255) as u8;
             }
             _ => {
                 out_row[idx] = sample(&planes[0], x);
@@ -648,7 +802,9 @@ mod tests {
     #[test]
     fn embedded_thumbnail_extraction() {
         let ch = deterministic(20, 10, 3, 8);
-        let fake_jpeg: Vec<u8> = (0..=255u8).cycle().take(777).collect(); // 奇数长度检验偶数对齐
+        // 真 JPEG 必以 SOI(FFD8FF)+marker 开头；奇数总长检验偶数对齐
+        let mut fake_jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        fake_jpeg.extend((0..=255u8).cycle().take(773));
         let data = encode_psd(&ch, 2, 1, Some(&fake_jpeg));
         let info = parse(&data).unwrap();
         let got = embedded_thumbnail(&data, &info).unwrap();
@@ -713,14 +869,57 @@ mod tests {
             Err(PsdError::UnsupportedCompression(2))
         ));
 
-        // 不支持的颜色模式（CMYK=4）
+        // 不支持的颜色模式（Lab=9）
         let mut bad = data.clone();
-        bad[24..26].copy_from_slice(&4u16.to_be_bytes());
+        bad[24..26].copy_from_slice(&9u16.to_be_bytes());
         let info2 = parse(&bad).unwrap();
         assert!(matches!(
             decode_composite(&bad, &info2, 0, 1.0),
-            Err(PsdError::UnsupportedMode(4))
+            Err(PsdError::UnsupportedMode(9))
         ));
+    }
+
+    #[test]
+    fn embedded_thumbnail_strips_photoshop_header() {
+        // 真实 Photoshop 的 1036：28 字节头 + JFIF。头内字段值取真实形态
+        //（version=1、缩略图宽高、压缩后大小），扫描 SOI 应跳过头。
+        let ch = deterministic(20, 10, 3, 8);
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        jpeg.extend((0..=255u8).cycle().take(773));
+        let mut hdr = vec![0u8; 28];
+        hdr[0..4].copy_from_slice(&1u32.to_be_bytes()); // version = JPEG
+        hdr[4..8].copy_from_slice(&160u32.to_be_bytes()); // width
+        hdr[8..12].copy_from_slice(&120u32.to_be_bytes()); // height
+        hdr[12..16].copy_from_slice(&(jpeg.len() as u32 + 28).to_be_bytes());
+        hdr[16..20].copy_from_slice(&(jpeg.len() as u32).to_be_bytes());
+        let mut res = hdr;
+        res.extend_from_slice(&jpeg);
+        let data = encode_psd(&ch, 1, 1, Some(&res));
+        let info = parse(&data).unwrap();
+        let got = embedded_thumbnail(&data, &info).expect("应能剥头提取");
+        assert_eq!(got, jpeg, "剥头后应恰为 JPEG 流");
+    }
+
+    #[test]
+    fn cmyk_composite_roundtrip() {
+        // CMYK8 无 alpha（4 通道）与带 alpha（5 通道）
+        for &nch in &[4usize, 5usize] {
+            let mut ch = deterministic(25, 13, nch, 8);
+            ch.mode = 4;
+            let data = encode_psd(&ch, 1, 1, None);
+            let info = parse(&data).unwrap();
+            let c = decode_composite(&data, &info, 0, 1.0).expect("CMYK 应可解码");
+            assert_eq!(c.image.dimensions(), (25, 13));
+            let bps = 1usize;
+            let px = c.image.get_pixel(7, 5).0;
+            let s = |i: usize| ch.planes[i][5 * 25 + 7] as u16;
+            let (ck, mk, yk) = (s(0), s(1), s(2));
+            let k = s(3);
+            assert_eq!(px[0], 255 - (ck + k).min(255) as u8);
+            assert_eq!(px[1], 255 - (mk + k).min(255) as u8);
+            assert_eq!(px[2], 255 - (yk + k).min(255) as u8);
+            assert_eq!(px[3], if nch == 5 { ch.planes[4][5 * 25 + 7] } else { 255 });
+        }
     }
 
     #[test]
@@ -748,6 +947,29 @@ mod tests {
         let info = parse(&data).unwrap();
         let c = decode_composite(&data, &info, 100, 1.0).unwrap();
         assert!(c.image.width() <= 100 && c.image.height() <= 100);
+    }
+
+    #[test]
+    fn source_decode_matches_slice() {
+        // 流式（ByteSource 采样）与全量切片解码结果一致——流式合成路径的正确性基线
+        for &version in &[1u16, 2u16] {
+            for &comp in &[0u16, 1u16] {
+                for &(nch, mode) in &[(3usize, 3u16), (4usize, 4u16), (2usize, 1u16)] {
+                    let mut ch = deterministic(64, 40, nch, 8);
+                    ch.mode = mode;
+                    let data = encode_psd(&ch, version, comp, None);
+                    let info = parse(&data).unwrap();
+                    let a = decode_composite(&data, &info, 20, 1.0).unwrap();
+                    let mut src = SliceSource(&data[..]);
+                    let b = decode_composite_source(&mut src, &info, 20, 1.0).unwrap();
+                    assert_eq!(a.image.dimensions(), b.image.dimensions());
+                    assert_eq!(a.image.into_raw(), b.image.into_raw());
+                    // 前缀解析等价
+                    let info2 = parse_prefix(&data[..80], data.len() as u64).unwrap();
+                    assert_eq!((info2.img_start, info2.res_end), (info.img_start, info.res_end));
+                }
+            }
+        }
     }
 
     #[test]

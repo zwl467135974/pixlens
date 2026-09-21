@@ -2,6 +2,36 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.1.1（2026-09-21）
+
+真实 Photoshop 文件缩略图修复（用户实测 4.36GB 工作目录反馈，桌面版同发）。
+
+### 修复（三个叠加的根因）
+
+- **1036 内嵌缩略图带 28 字节头**：真实 Photoshop 写入的 1036 资源前有
+  version/宽高/尺寸头，JPEG 从 SOI 起——此前原样交给 GDI+ 必然解码失败，
+  内嵌快路径在真实文件上从未生效（合成样本为无头格式故测试全绿未暴露）。
+  修复：资源前 64 字节内扫描 SOI 定位 JPEG 流，两种形态统一兼容
+- **GDI+ 未初始化**：GdiplusInit 结构体定义了却没有实例化（历史清理时丢失），
+  status=18(GdiplusNotInitialized)——被合成图兜底掩盖。修复：惰性 magic-static 初始化
+- **v1.1.0 的 512MB 流截断回归**：>512MB 无内嵌缩略图文件在流模式下合成数据被截断。
+  修复：stream 初始化只读 2MB 头，合成图改走 **IStream seek 回调按需采样**
+  （psd-codec 新增 ByteSource + decode_composite_source，psd-capi 新增
+  pixlens_psd_composite_rgba_stream）——任意大小文件有界内存，
+  2GB 带缩略图文件从吞 2GB 内存降为只读 2MB
+
+### 新增
+
+- **CMYK 合成支持**：朴素 C+K 还原（无 ICC 近似观感），印刷向 PSD 也能出预览
+- gen-psd `--real`：真实 Photoshop 形态样本（带头 1036 / CMYK / 前置资源块），
+  `--probe`：单文件解析诊断
+- 流式与切片解码一致性单测（source_decode_matches_slice）
+
+### 验证
+
+安装版 v1.1.1：LIB-PSB + REAL-PSD 全量 22/22（含 2×2GB，缓存击穿后新鲜提取）；
+huge_plain 流式采样输出与最初验证版字节级一致。
+
 ## v1.1.0（2026-09-21）
 
 易用性专项：把"好用"补到与"快"同等水位；超大文件缩略图收尾。

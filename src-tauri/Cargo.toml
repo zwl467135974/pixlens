@@ -1,6 +1,6 @@
 [package]
 name = "pixlens"
-version = "1.1.0"
+version = "1.1.1"
 description = "PixLens 图镜 — 免费轻快的本地看图软件"
 authors = ["Wyler"]
 edition = "2021"
