@@ -117,7 +117,56 @@ if($hr -eq 0 -and (Test-Path $png)){ $verdict = 'SUCCESS' }
 elseif($hr -eq 0x8004B200){ $verdict = 'handler-invoked but FAILED (registration ok, decode/blocked)' }
 elseif($hr -eq 0x80070057){ $verdict = 'E_INVALIDARG (shell refused)' }
 elseif($hr -eq 0x80004005){ $verdict = 'E_FAIL' }
+elseif($hr -eq 0x80040154){ $verdict = 'REGDB_E_CLASSNOTREG (CLSID lookup/load FAILED - policy or bitness)' }
 Log ("  GetImage hr = 0x{0:X8}  {1}" -f $hr, $verdict)
+
+# 6b. deep probe: bitness, LoadLibrary, direct COM activation, policy
+Log ""
+Log "[6b] Deep probe:"
+$b64 = [Environment]::Is64BitProcess; $os64 = [Environment]::Is64BitOS
+$bnote = if(-not $b64){' <-- 32bit PS: registry view differs, rerun via System32 powershell'}else{''}
+Log ("  PS process: 64bit={0}  OS 64bit={1}{2}" -f $b64, $os64, $bnote)
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class PXL {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern IntPtr LoadLibraryW(string f);
+  [DllImport("kernel32.dll")] public static extern bool FreeLibrary(IntPtr h);
+  [ComImport, Guid("e357fccd-a995-4576-b01f-234630154e96"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IThumbProv {
+    [PreserveSig] int GetThumbnail(uint cx, out IntPtr hbmp, out int alpha);
+  }
+  [DllImport("ole32.dll")]
+  public static extern int CoCreateInstance(ref Guid clsid, IntPtr pUnkOuter, uint dwClsContext, ref Guid riid, out IThumbProv ppv);
+}
+"@
+if($inproc -and (Test-Path $inproc)){
+  $h = [PXL]::LoadLibraryW($inproc)
+  if($h -ne [IntPtr]::Zero){
+    Log "  LoadLibrary(thumb dll) OK"
+    [void][PXL]::FreeLibrary($h)
+  } else {
+    $e = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    $why = switch($e){ 126 {'126 module not found (missing dependency)'} 127 {'127 proc not found'} 5 {'5 access denied (policy/AV?)'} 193 {'193 bad format (bitness?)'} 998 {'998 access violation in init'} default {"$e"} }
+    Log "  LoadLibrary(thumb dll) FAILED: $why  <-- KEY FINDING"
+  }
+  $c = New-Object Guid('2B2E7C27-BC52-4521-9A56-87BC2DFC7639')
+  $r = New-Object Guid('E357FCCD-A995-4576-B01F-234630154E96')
+  $prov = $null
+  $hrC = [PXL]::CoCreateInstance([ref]$c, [IntPtr]::Zero, 1, [ref]$r, [ref]$prov)
+  if($hrC -eq 0){
+    Log "  CoCreateInstance(thumbnail provider) OK - COM registration is WORKING in this process"
+  } else {
+    Log ("  CoCreateInstance FAILED hr=0x{0:X8}  <-- COM cannot activate class here" -f $hrC)
+  }
+} else { Log "  skipped (dll path unknown)" }
+$appLocker = Test-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\SrpV2"
+$srp = Test-Path "HKLM:\Software\Policies\Microsoft\Windows\Safer\CodeIdentifiers"
+Log ("  AppLocker policy: {0}  SRP policy: {1} $(if($appLocker -or $srp){'<-- DLL RULES MAY BLOCK LOADING'})" -f $appLocker, $srp)
+foreach($rt in @('vcruntime140.dll','msvcp140.dll')){
+  Log ("  $rt in System32: " + (Test-Path "$env:SystemRoot\System32\$rt"))
+}
 
 # 7. fix
 if($Fix){
@@ -126,7 +175,7 @@ if($Fix){
   if($dir -and (Test-Path (Join-Path $dir 'pixlens_thumb_cpp.dll'))){
     New-Item -Path "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" -Force | Out-Null
     Set-ItemProperty "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" '(default)' (Join-Path $dir 'pixlens_thumb_cpp.dll')
-    New-ItemProperty "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" 'ThreadingModel' 'Apartment' -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" -Name 'ThreadingModel' -Value 'Apartment' -PropertyType String -Force | Out-Null
     Log "  CLSID re-registered -> $dir"
     foreach($ext in @('.psd','.psb')){
       New-Item -Path "HKCU:\Software\Classes\$ext\shellex\$thumbKey" -Force | Out-Null
@@ -148,6 +197,28 @@ if($Fix){
     try { $hr2 = [PXD]::Extract($testPsd, 256, $png) } catch {}
     $v2 = if($hr2 -eq 0 -and (Test-Path $png)){'SUCCESS after fix'}else{'still failing - SEND REPORT BACK'}
     Log ("  retest hr = 0x{0:X8}  {1}" -f $hr2, $v2)
+
+    # fallback: relocate DLLs to an ASCII-safe path under LOCALAPPDATA and re-register
+    if(-not ($hr2 -eq 0 -and (Test-Path $png))){
+      Log "  [fallback] relocating shell DLLs to ASCII path..."
+      $safeDir = Join-Path $env:LOCALAPPDATA 'PixLensShell'
+      New-Item -ItemType Directory -Path $safeDir -Force | Out-Null
+      $moved = $true
+      foreach($f in @('pixlens_thumb_cpp.dll','pixlens_psd.dll')){
+        $srcF = Join-Path $dir $f
+        if(Test-Path $srcF){ Copy-Item $srcF (Join-Path $safeDir $f) -Force } else { $moved = $false }
+      }
+      if($moved){
+        Set-ItemProperty "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" '(default)' (Join-Path $safeDir 'pixlens_thumb_cpp.dll')
+        Log "  CLSID repointed -> $safeDir"
+        Get-Process dllhost -ErrorAction SilentlyContinue | ForEach-Object { try { $_ | Stop-Process -Force -ErrorAction Stop } catch {} }
+        if(Test-Path $png){ Remove-Item $png -Force }
+        $hr3 = -1
+        try { $hr3 = [PXD]::Extract($testPsd, 256, $png) } catch {}
+        $v3 = if($hr3 -eq 0 -and (Test-Path $png)){'SUCCESS after relocation'}else{'still failing - SEND REPORT BACK'}
+        Log ("  retest hr = 0x{0:X8}  {1}" -f $hr3, $v3)
+      }
+    }
   } else { Log "  fix skipped: install dir or dll not found" }
 } else {
   Log ""
