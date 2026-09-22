@@ -19,6 +19,7 @@ $thumbKey = '{E357FCCD-A995-4576-B01F-234630154E96}'
 # 1. install location + files
 $inst = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PixLens" -ErrorAction SilentlyContinue).InstallLocation
 if(-not $inst){ $inst = (Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PixLens" -ErrorAction SilentlyContinue).InstallLocation }
+if($inst){ $inst = $inst.Trim('"') }
 Log ""
 Log "[1] Install location: $inst"
 $inproc = (Get-ItemProperty "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" -ErrorAction SilentlyContinue).'(default)'
@@ -28,11 +29,14 @@ $dir = $null
 if($inproc -and (Test-Path $inproc)){ $dir = Split-Path $inproc }
 elseif($inst -and (Test-Path (Join-Path $inst 'pixlens_thumb_cpp.dll'))){ $dir = $inst }
 if($dir){
-  foreach($f in @('pixlens_thumb_cpp.dll','pixlens_psd.dll','pixlens.exe')){
+  foreach($f in @('pixlens_thumb_cpp.dll','pixlens_psd.dll')){
     $p = Join-Path $dir $f
     if(Test-Path $p){ $i = Get-Item $p; Log ("[1] {0} : {1:N0} bytes  {2}" -f $f, $i.Length, $i.LastWriteTime) }
     else { Log "[1] $f : MISSING  <-- problem" }
   }
+  $exeP = if($inst){ Join-Path $inst 'pixlens.exe' } else { Join-Path $dir 'pixlens.exe' }
+  if(Test-Path $exeP){ Log ("[1] pixlens.exe (install dir): {0:N0} bytes" -f (Get-Item $exeP).Length) }
+  else { Log "[1] pixlens.exe : MISSING in install dir" }
 } else { Log "[1] install dir NOT FOUND <-- problem" }
 
 # 2. per-user vs per-machine registration
@@ -168,6 +172,16 @@ foreach($rt in @('vcruntime140.dll','msvcp140.dll')){
   Log ("  $rt in System32: " + (Test-Path "$env:SystemRoot\System32\$rt"))
 }
 
+# 6c. whose account is the desktop Explorer running under?
+Log ""
+Log "[6c] Explorer process owner(s):"
+try {
+  Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop | ForEach-Object {
+    $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner
+    Log ("  PID {0} -> {1}\{2} $(if("$($o.Domain)\$($o.User)" -ne "$env:USERDOMAIN\$env:USERNAME"){'<-- DIFFERENT from current user!'})" -f $_.ProcessId, $o.Domain, $o.User)
+  }
+} catch { Log "  probe failed: $($_.Exception.Message)" }
+
 # 7. fix
 if($Fix){
   Log ""
@@ -192,6 +206,25 @@ if($Fix){
     }
     Get-Process dllhost -ErrorAction SilentlyContinue | ForEach-Object { try { $_ | Stop-Process -Force -ErrorAction Stop } catch {} }
     Log "  dllhost flushed (restarts on demand)"
+
+    # machine-wide HKLM registration: shell thumbnail extraction may run in a
+    # context where HKCU is NOT visible (SYSTEM surrogate / other account's
+    # Explorer) -- HKLM is what commercial shell extensions (Adobe etc.) use
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if($isAdmin){
+      try {
+        $dllFull = (Get-ItemProperty "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" -ErrorAction SilentlyContinue).'(default)'
+        if(-not $dllFull){ $dllFull = Join-Path $dir 'pixlens_thumb_cpp.dll' }
+        New-Item -Path "HKLM:\Software\Classes\CLSID\$clsid\InprocServer32" -Force | Out-Null
+        Set-ItemProperty "HKLM:\Software\Classes\CLSID\$clsid\InprocServer32" '(default)' $dllFull
+        New-ItemProperty -Path "HKLM:\Software\Classes\CLSID\$clsid\InprocServer32" -Name 'ThreadingModel' -Value 'Apartment' -PropertyType String -Force | Out-Null
+        foreach($ext in @('.psd','.psb')){
+          New-Item -Path "HKLM:\Software\Classes\$ext\shellex\$thumbKey" -Force | Out-Null
+          Set-ItemProperty "HKLM:\Software\Classes\$ext\shellex\$thumbKey" '(default)' $clsid
+        }
+        Log "  HKLM machine-wide registration written -> $dllFull (visible to ALL contexts/users)"
+      } catch { Log "  HKLM write FAILED: $($_.Exception.Message)" }
+    } else { Log "  HKLM skipped: process not elevated -- RIGHT-CLICK bat, run as administrator" }
     if(Test-Path $png){ Remove-Item $png -Force }
     $hr2 = -1
     try { $hr2 = [PXD]::Extract($testPsd, 256, $png) } catch {}
@@ -206,7 +239,10 @@ if($Fix){
       $moved = $true
       foreach($f in @('pixlens_thumb_cpp.dll','pixlens_psd.dll')){
         $srcF = Join-Path $dir $f
-        if(Test-Path $srcF){ Copy-Item $srcF (Join-Path $safeDir $f) -Force } else { $moved = $false }
+        $dstF = Join-Path $safeDir $f
+        if($srcF -ne $dstF){
+          if(Test-Path $srcF){ Copy-Item $srcF $dstF -Force } else { $moved = $false }
+        }
       }
       if($moved){
         Set-ItemProperty "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" '(default)' (Join-Path $safeDir 'pixlens_thumb_cpp.dll')
