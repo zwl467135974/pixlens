@@ -6,6 +6,7 @@ import { ipc, type AppSettings, type Entry, type FsChanged } from "./ipc";
 import { AppState, type SortDir, type SortKey } from "./state";
 import { Grid } from "./grid/grid";
 import { Viewer } from "./viewer/viewer";
+import { CompareView } from "./compare/compare";
 import { BatchPanel } from "./batch/panel";
 import { EditorPanel } from "./editor/panel";
 import { SettingsPanel } from "./ui/settings-panel";
@@ -14,6 +15,7 @@ import { runBench } from "./bench";
 const state = new AppState();
 const grid = new Grid(document.getElementById("grid") as HTMLElement);
 const viewer = new Viewer(document.getElementById("app") as HTMLElement, () => state.view);
+const compareView = new CompareView(document.getElementById("app") as HTMLElement);
 const editorPanel = new EditorPanel(document.getElementById("app") as HTMLElement, viewer);
 viewer.onEditRequest = () => editorPanel.open();
 
@@ -26,8 +28,16 @@ const batchPanel = new BatchPanel(
   () => [...selected],
   () => {
     els.btnBatch.disabled = selected.size === 0;
+    els.btnCompare.disabled = selected.size !== 2;
   },
 );
+
+/** 双图对比：按网格顺序取选中的两张 */
+function openCompare(): void {
+  if (selected.size !== 2 || viewer.isOpen || compareView.isOpen) return;
+  const picked = state.view.filter((e) => selected.has(e.path));
+  if (picked.length === 2) compareView.open(picked[0], picked[1]);
+}
 
 grid.onTileOpen = (e) => {
   if (!selected.has(e.path)) {
@@ -60,6 +70,7 @@ grid.onTileClick = (e, ev) => {
 function refreshSelection(): void {
   grid.setSelected(selected);
   els.btnBatch.disabled = selected.size === 0;
+  els.btnCompare.disabled = selected.size !== 2;
   status();
 }
 
@@ -70,6 +81,7 @@ const els = {
   btnOpen: $("btn-open"),
   btnOpen2: $("btn-open-2"),
   btnBatch: $("btn-batch") as HTMLButtonElement,
+  btnCompare: $("btn-compare") as HTMLButtonElement,
   search: $("search") as HTMLInputElement,
   sortKey: $("sort-key") as HTMLSelectElement,
   sortDir: $("sort-dir"),
@@ -184,6 +196,7 @@ function wireUi(): void {
   els.btnOpen.addEventListener("click", () => void openFolder());
   els.btnOpen2.addEventListener("click", () => void openFolder());
   els.btnBatch.addEventListener("click", () => batchPanel.open());
+  els.btnCompare.addEventListener("click", openCompare);
   els.btnSettings.addEventListener("click", () => void settingsPanel.open());
   document.addEventListener("keydown", (ev) => {
     if (ev.ctrlKey && ev.key.toLowerCase() === "o") {
@@ -210,6 +223,15 @@ function wireUi(): void {
         (firstSel ? state.view.find((e) => e.path === firstSel) : undefined) ??
         state.view[0];
       if (target) viewer.open(target.path);
+    }
+    // C：双图对比（恰好选中两张时）
+    if (
+      ev.key.toLowerCase() === "c" && !ev.ctrlKey && !ev.altKey && currentFolder &&
+      !viewer.isOpen && !compareView.isOpen && selected.size === 2 &&
+      tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA"
+    ) {
+      ev.preventDefault();
+      openCompare();
     }
   });
 

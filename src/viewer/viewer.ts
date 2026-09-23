@@ -16,7 +16,7 @@ const MAX_SCALE = 40;
 
 type Source = { kind: "bitmap"; bmp: ImageBitmap } | { kind: "img"; img: HTMLImageElement };
 
-interface Frame {
+export interface Frame {
   src: Source;
   /** 原始（全尺寸）宽高 —— 变换基准 */
   naturalW: number;
@@ -963,7 +963,7 @@ export class Viewer {
 /** 同一 URL 的并发请求共享同一 Promise（避免 show 与 loadFull 重复 fetch） */
 const inflight = new Map<string, Promise<Frame>>();
 
-function loadFrame(entry: Entry, maxDim: number, page: number, exposure: number): Promise<Frame> {
+export function loadFrame(entry: Entry, maxDim: number, page: number, exposure: number): Promise<Frame> {
   const url = imageUrl(entry, maxDim, page, exposure);
   const existing = inflight.get(url);
   if (existing) return existing;
