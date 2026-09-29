@@ -115,13 +115,14 @@ export async function runBench(
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** P6 翻页响应（预取 ±2）+ P7 大图 100% 平移帧率 */
+/** P6 翻页响应（预取 ±2）+ P7 大图 100% 平移帧率（视频不进查看器） */
 async function viewerBench(
   folder: string,
   viewer: Viewer,
-  entries: Entry[],
+  allEntries: Entry[],
   log: (m: string, v: number) => void,
 ): Promise<void> {
+  const entries = allEntries.filter((e) => e.kind !== "video");
   if (entries.length < 4) return;
   const mid = entries[Math.floor(entries.length / 2)]!;
   viewer.open(mid.path);

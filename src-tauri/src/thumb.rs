@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+use walkdir::WalkDir;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::DynamicImage;
@@ -193,18 +194,47 @@ fn get_thumb(state: &ThumbState, src: &str, w: u32) -> std::io::Result<ThumbOutp
         return Ok(out);
     }
 
+    // 视频：Media Foundation 提取代表帧（doc/03 §6.3）
+    if crate::scan::is_video_ext(&ext) {
+        let out = video_thumb(state, &path, w)?;
+        let _ = fs::write(&cache, &out.bytes);
+        state.note_write();
+        return Ok(out);
+    }
+
     let _permit = state.sem.acquire();
     let img = decode_with_limits(&path)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let bytes = encode_jpeg(img, w)?;
+    let _ = fs::write(&cache, &bytes);
+    state.note_write();
+    Ok(ThumbOutput { bytes, mime: "image/jpeg" })
+}
+
+/// 视频缩略图：MF 提取代表帧 → 缩放 → JPEG（缓存键与图片共用一套）
+#[cfg(windows)]
+fn video_thumb(state: &ThumbState, path: &Path, w: u32) -> std::io::Result<ThumbOutput> {
+    let _permit = state.sem.acquire();
+    let frame = crate::codecs::video::extract_frame(path)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let bytes = encode_jpeg(image::DynamicImage::ImageRgba8(frame), w)?;
+    Ok(ThumbOutput { bytes, mime: "image/jpeg" })
+}
+
+#[cfg(not(windows))]
+fn video_thumb(_state: &ThumbState, _path: &Path, _w: u32) -> std::io::Result<ThumbOutput> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "仅支持 Windows"))
+}
+
+/// 缩放 + 压暗透明底 + JPEG(q82)；缓存写入由调用方负责
+fn encode_jpeg(img: DynamicImage, w: u32) -> std::io::Result<Vec<u8>> {
     let thumb = downscale(img, w);
     let rgb = flatten_alpha(thumb);
     let mut buf: Vec<u8> = Vec::with_capacity(16 * 1024);
     let enc = JpegEncoder::new_with_quality(&mut buf, JPEG_QUALITY);
     rgb.write_with_encoder(enc)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let _ = fs::write(&cache, &buf);
-    state.note_write();
-    Ok(ThumbOutput { bytes: buf, mime: "image/jpeg" })
+    Ok(buf)
 }
 
 /// PSD/PSB 缩略图：mmap → 1036 内嵌 JPEG 快路径；无内嵌则合成图跨步解码缩略
@@ -225,13 +255,8 @@ fn psd_thumb(state: &ThumbState, path: &Path, w: u32) -> std::io::Result<ThumbOu
     let _permit = state.sem.acquire();
     let composite = crate::codecs::psd::decode_composite(&mmap, &info, w, 1.0).map_err(invalid)?;
     let img = DynamicImage::ImageRgba8(composite.image);
-    let thumb = downscale(img, w);
-    let rgb = flatten_alpha(thumb);
-    let mut buf: Vec<u8> = Vec::with_capacity(16 * 1024);
-    let enc = JpegEncoder::new_with_quality(&mut buf, JPEG_QUALITY);
-    rgb.write_with_encoder(enc)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    Ok(ThumbOutput { bytes: buf, mime: "image/jpeg" })
+    let bytes = encode_jpeg(img, w)?;
+    Ok(ThumbOutput { bytes, mime: "image/jpeg" })
 }
 
 fn cache_key(path: &Path, size: u64, mtime: u64, w: u32) -> String {    let mut h = blake3::Hasher::new();
@@ -298,6 +323,20 @@ fn placeholder() -> ThumbOutput {
 }
 
 impl ThumbState {
+    /// 测试用：临时缓存目录 + 固定并发
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        let dir = std::env::temp_dir().join(format!("pixlens-thumb-test-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        Self {
+            cache_dir: dir,
+            sem: Gate::new(2),
+            view_sem: Gate::new(2),
+            max_cache_bytes: std::sync::atomic::AtomicU64::new(1024 * 1024 * 1024),
+            writes: AtomicUsize::new(0),
+        }
+    }
+
     /// 记录一次缓存写入，周期性触发 LRU 淘汰
     pub fn note_write(&self) {
         let n = self.writes.fetch_add(1, Ordering::Relaxed) + 1;
@@ -307,6 +346,38 @@ impl ThumbState {
             std::thread::spawn(move || evict_if_needed(&dir, max));
         }
     }
+}
+
+/// 视频缩略图全管线（MF 提帧 → JPEG → 磁盘缓存命中）。本地手动跑。
+#[cfg(windows)]
+#[test]
+#[ignore]
+fn video_thumb_pipeline() {
+    let dir = PathBuf::from(r"C:\Users\GA\Desktop");
+    let target = WalkDir::new(&dir)
+        .min_depth(1)
+        .max_depth(2)
+        .into_iter()
+        .flatten()
+        .find(|e| e.path().extension().map(|x| x == "mp4").unwrap_or(false))
+        .map(|e| e.into_path())
+        .expect("桌面下无 mp4 样本");
+    let state = ThumbState::for_test();
+    let src = target.to_string_lossy().into_owned();
+
+    let t0 = Instant::now();
+    let out1 = get_thumb(&state, &src, 256).expect("首次提取失败");
+    let cold = t0.elapsed().as_millis();
+    assert_eq!(out1.mime, "image/jpeg");
+    assert!(out1.bytes.len() > 1000, "JPEG 过小: {}", out1.bytes.len());
+    assert!(out1.bytes.starts_with(&[0xFF, 0xD8]), "非 JPEG 头");
+
+    let t1 = Instant::now();
+    let out2 = get_thumb(&state, &src, 256).expect("缓存读取失败");
+    let warm = t1.elapsed().as_millis();
+    assert_eq!(out1.bytes, out2.bytes, "缓存命中内容不一致");
+    println!("[video-thumb] 冷 {cold}ms / 热 {warm}ms / {} B", out1.bytes.len());
+    let _ = fs::remove_dir_all(&state.cache_dir);
 }
 
 /// LRU 淘汰：超限后按文件 mtime 从旧到新删除，直到降到 90% 以下

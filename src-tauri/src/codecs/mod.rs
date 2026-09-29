@@ -6,3 +6,5 @@ pub use psd_codec as psd;
 pub use psd_codec::tone_map;
 
 pub mod tiff_pages;
+#[cfg(windows)]
+pub mod video;

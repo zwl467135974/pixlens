@@ -101,6 +101,60 @@ fn path_is_dir(path: String) -> bool {
     std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
 }
 
+/// 用系统默认程序打开文件（视频双击 → 默认播放器）
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.is_file() {
+        return Err("文件不存在".into());
+    }
+    open_with_shell(p)
+}
+
+#[cfg(windows)]
+fn open_with_shell(path: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    const SW_SHOWNORMAL: i32 = 1;
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(
+            hwnd: *mut std::ffi::c_void,
+            verb: *const u16,
+            file: *const u16,
+            params: *const u16,
+            dir: *const u16,
+            show: i32,
+        ) -> usize;
+    }
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+    let verb = wide("open");
+    let file: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let ok = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if ok > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecuteW 失败 (code={ok})"))
+    }
+}
+
+#[cfg(not(windows))]
+fn open_with_shell(path: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn bench_clear_cache(state: tauri::State<AppState>) -> Result<(), String> {
     thumb::wipe_cache(&state.thumb.cache_dir)
@@ -333,6 +387,7 @@ pub fn run() {
             get_bench_config,
             get_launch_file,
             path_is_dir,
+            open_path,
             set_wallpaper,
             bench_clear_cache,
             bench_done,

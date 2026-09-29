@@ -212,6 +212,23 @@ export class Grid {
         } else {
           this.loadThumb(e, key);
         }
+        // 视频角标：半透明圆底 + 播放三角（无位图时也保留，便于识别）
+        if (e.kind === "video") {
+          const r = Math.max(10, Math.round(this.tileSize * 0.1));
+          const cx = x + this.tileSize - r - 9;
+          const cy = y + this.tileSize - r - 9;
+          ctx.fillStyle = "rgba(12,12,16,0.62)";
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "rgba(255,255,255,0.94)";
+          ctx.beginPath();
+          ctx.moveTo(cx - r * 0.32, cy - r * 0.48);
+          ctx.lineTo(cx - r * 0.32, cy + r * 0.48);
+          ctx.lineTo(cx + r * 0.56, cy);
+          ctx.closePath();
+          ctx.fill();
+        }
         // hover 高亮（未选中时）
         if (idx === this.hoverIdx && !this.selected.has(e.path)) {
           ctx.strokeStyle = "rgba(160,155,240,0.9)";

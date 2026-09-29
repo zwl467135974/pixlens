@@ -25,18 +25,23 @@ let anchorPath: string | null = null;
 
 const batchPanel = new BatchPanel(
   document.getElementById("app") as HTMLElement,
-  () => [...selected],
+  () => imageSelection(),
   () => {
-    els.btnBatch.disabled = selected.size === 0;
-    els.btnCompare.disabled = selected.size !== 2;
+    els.btnBatch.disabled = imageSelection().length === 0;
+    els.btnCompare.disabled = imageSelection().length !== 2;
   },
 );
 
-/** 双图对比：按网格顺序取选中的两张 */
+/** 双图对比：按网格顺序取选中的两张（视频不参与） */
 function openCompare(): void {
   if (selected.size !== 2 || viewer.isOpen || compareView.isOpen) return;
-  const picked = state.view.filter((e) => selected.has(e.path));
+  const picked = state.view.filter((e) => selected.has(e.path) && e.kind !== "video");
   if (picked.length === 2) compareView.open(picked[0], picked[1]);
+}
+
+/** 选中集合中的图片条目（批量转换/对比入口用，视频静默排除） */
+function imageSelection(): string[] {
+  return state.view.filter((e) => selected.has(e.path) && e.kind !== "video").map((e) => e.path);
 }
 
 grid.onTileOpen = (e) => {
@@ -44,6 +49,10 @@ grid.onTileOpen = (e) => {
     selected.clear();
     selected.add(e.path);
     refreshSelection();
+  }
+  if (e.kind === "video") {
+    void ipc.openPath(e.path); // 视频交给系统默认播放器
+    return;
   }
   viewer.open(e.path);
 };
@@ -69,8 +78,8 @@ grid.onTileClick = (e, ev) => {
 
 function refreshSelection(): void {
   grid.setSelected(selected);
-  els.btnBatch.disabled = selected.size === 0;
-  els.btnCompare.disabled = selected.size !== 2;
+  els.btnBatch.disabled = imageSelection().length === 0;
+  els.btnCompare.disabled = imageSelection().length !== 2;
   status();
 }
 
@@ -140,9 +149,10 @@ function applyView(keepScroll = true): void {
   status();
 }
 
-/** 拖拽打开：文件夹 → 直接浏览；图片 → 打开所在文件夹并进查看器（与双击关联启动一致） */
-const IMG_EXTS = new Set([
+/** 拖拽打开：文件夹 → 直接浏览；图片/视频 → 打开所在文件夹并进查看器（与双击一致） */
+const MEDIA_EXTS = new Set([
   "jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "avif", "svg", "tif", "tiff", "psd", "psb", "hdr",
+  "mp4", "m4v", "mov", "webm", "mkv", "avi", "wmv",
 ]);
 
 async function openDropped(paths: string[]): Promise<void> {
@@ -154,12 +164,16 @@ async function openDropped(paths: string[]): Promise<void> {
     dir = first;
   } else {
     const ext = first.slice(first.lastIndexOf(".") + 1).toLowerCase();
-    if (!IMG_EXTS.has(ext)) return; // 非图片文件：不响应，避免扫出空网格
+    if (!MEDIA_EXTS.has(ext)) return; // 非媒体文件：不响应，避免扫出空网格
     dir = first.replace(/[\\/][^\\/]+$/, "");
     viewFile = first;
   }
   await openFolder(dir);
-  if (viewFile && state.view.some((e) => e.path === viewFile)) viewer.open(viewFile);
+  if (viewFile && state.view.some((e) => e.path === viewFile)) {
+    const entry = state.view.find((e) => e.path === viewFile)!;
+    if (entry.kind === "video") void ipc.openPath(entry.path);
+    else viewer.open(viewFile);
+  }
 }
 
 function status(extra = ""): void {
@@ -169,7 +183,7 @@ function status(extra = ""): void {
   els.statusLeft.textContent = extra
     ? extra
     : folder
-      ? `${shown === total ? total : `${shown} / ${total}`} 张图片 · ${folder}`
+      ? `${shown === total ? total : `${shown} / ${total}`} 个文件 · ${folder}`
       : "";
   const parts: string[] = [];
   if (selected.size) parts.push(`已选 ${selected.size} 张`);
@@ -222,7 +236,10 @@ function wireUi(): void {
         grid.hoverEntry() ??
         (firstSel ? state.view.find((e) => e.path === firstSel) : undefined) ??
         state.view[0];
-      if (target) viewer.open(target.path);
+      if (target) {
+        if (target.kind === "video") void ipc.openPath(target.path);
+        else viewer.open(target.path);
+      }
     }
     // C：双图对比（恰好选中两张时）
     if (

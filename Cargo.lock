@@ -2521,6 +2521,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tiff",
  "walkdir",
+ "windows",
 ]
 
 [[package]]

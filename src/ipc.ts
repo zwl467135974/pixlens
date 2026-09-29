@@ -7,6 +7,8 @@ export interface Entry {
   ext: string;
   size: number;
   mtime: number;
+  /** "image" 走图片管线；"video" 走 MF 首帧缩略图 + 系统播放器 */
+  kind: "image" | "video";
 }
 
 export interface ScanResult {
@@ -115,6 +117,7 @@ export const ipc = {
   setSettings: (settings: AppSettings) => invoke<number>("set_settings", { settings }),
   getLaunchFile: () => invoke<string | null>("get_launch_file"),
   pathIsDir: (path: string) => invoke<boolean>("path_is_dir", { path }),
+  openPath: (path: string) => invoke<void>("open_path", { path }),
   rememberFolder: (path: string) => invoke<void>("remember_folder", { path }),
   setWallpaper: (pngB64: string) => invoke<void>("set_wallpaper", { pngB64 }),
   benchMemory: () => invoke<number>("bench_memory"),

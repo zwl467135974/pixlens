@@ -18,9 +18,17 @@ pub const IMAGE_EXTS: &[&str] = &[
     "hdr",
 ];
 
+/// 视频扩展名白名单（小写）：首帧由 Media Foundation 提取，双击交给系统播放器
+pub const VIDEO_EXTS: &[&str] = &["mp4", "m4v", "mov", "webm", "mkv", "avi", "wmv"];
+
 pub fn is_image_ext(ext: &str) -> bool {
     let e = ext.to_ascii_lowercase();
     IMAGE_EXTS.contains(&e.as_str())
+}
+
+pub fn is_video_ext(ext: &str) -> bool {
+    let e = ext.to_ascii_lowercase();
+    VIDEO_EXTS.contains(&e.as_str())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -32,6 +40,8 @@ pub struct Entry {
     pub size: u64,
     /// 毫秒级 Unix 时间戳（与缩略图缓存键联动）
     pub mtime: u64,
+    /// "image" | "video"：视频走 MF 首帧缩略图 + 系统播放器打开
+    pub kind: &'static str,
 }
 
 #[derive(Serialize)]
@@ -51,9 +61,13 @@ pub fn entry_from_path(p: &Path) -> Option<Entry> {
         .extension()
         .map(|e| e.to_string_lossy().into_owned())
         .unwrap_or_default();
-    if !is_image_ext(&ext) {
+    let kind = if is_image_ext(&ext) {
+        "image"
+    } else if is_video_ext(&ext) {
+        "video"
+    } else {
         return None;
-    }
+    };
     let mtime = md
         .modified()
         .ok()?
@@ -66,6 +80,7 @@ pub fn entry_from_path(p: &Path) -> Option<Entry> {
         ext: ext.to_ascii_lowercase(),
         size: md.len(),
         mtime,
+        kind,
     })
 }
 
@@ -214,9 +229,9 @@ fn build_payload(
         }
     }
     for p in removed {
-        // 只关心图片扩展名的路径
+        // 只关心支持的媒体扩展名（图片 + 视频）
         let ext = p.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
-        if is_image_ext(&ext) {
+        if is_image_ext(&ext) || is_video_ext(&ext) {
             out.removed.push(p.to_string_lossy().into_owned());
         }
     }

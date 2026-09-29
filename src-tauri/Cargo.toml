@@ -41,3 +41,12 @@ psd-codec = { path = "../crates/psd-codec" }
 kamadak-exif = "0.5"
 # 壁纸：前端导出 PNG 的 base64 传输解码
 base64 = "0.22"
+# 视频首帧提取：Media Foundation（版本对齐依赖树已有的 windows 0.61，避免重复编译）
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+] }
