@@ -17,7 +17,7 @@ $payload = @{
     tag_name     = $tag
     name         = $name
     body         = $body
-    target_commitish = 'master'
+    target_commitish = 'main'
     prerelease   = $false
 } | ConvertTo-Json
 $bytes = [Text.Encoding]::UTF8.GetBytes($payload)
