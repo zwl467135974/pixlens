@@ -11,13 +11,19 @@ Log "User: $env:USERNAME  Machine: $env:COMPUTERNAME"
 Log "OS: $([Environment]::OSVersion.VersionString)"
 
 # 0. installed version (video thumbnails need >= 1.3.1)
-$ver = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PixLens" -ErrorAction SilentlyContinue).DisplayVersion
-if(-not $ver){ $ver = (Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PixLens" -ErrorAction SilentlyContinue).DisplayVersion }
+# stale uninstall entries may linger (old per-user install + new per-machine install);
+# report every candidate plus the real exe timestamp instead of one possibly-stale value
+$vHkcu = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PixLens" -ErrorAction SilentlyContinue).DisplayVersion
+$vHklm = (Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PixLens" -ErrorAction SilentlyContinue).DisplayVersion
+$ver = $vHkcu; if(-not $ver){ $ver = $vHklm }
+$best = @($vHkcu, $vHklm) | Where-Object { $_ } | ForEach-Object { [version]$_ } | Sort-Object -Descending | Select-Object -First 1
 $verNote = ''
-if(-not $ver){ $verNote = '  <-- NOT INSTALLED' }
-elseif([version]$ver -lt [version]'1.3.1'){ $verNote = '  <-- TOO OLD: video thumbnails need 1.3.1+' }
+if(-not $best){ $verNote = '  <-- NOT INSTALLED' }
+elseif($best -lt [version]'1.3.1'){ $verNote = '  <-- TOO OLD: video thumbnails need 1.3.1+' }
+elseif("$vHkcu" -ne "$vHklm" -and $vHkcu -and $vHklm){ $verNote = '  (stale duplicate uninstall entries; highest = actual)' }
 Log ""
-Log "[0] PixLens version: $ver$verNote"
+Log "[0] DisplayVersion: HKCU=$vHkcu  HKLM=$vHklm$verNote"
+Log ("[0] best version = {0}" -f $best)
 
 $clsid = '{2B2E7C27-BC52-4521-9A56-87BC2DFC7639}'
 $TestPsdB64 = @'
@@ -32,7 +38,8 @@ if($inst){ $inst = $inst.Trim('"') }
 Log ""
 Log "[1] Install location: $inst"
 $inproc = (Get-ItemProperty "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" -ErrorAction SilentlyContinue).'(default)'
-Log "[1] CLSID InprocServer32 (HKCU): $inproc"
+if(-not $inproc){ $inproc = (Get-ItemProperty "HKLM:\Software\Classes\CLSID\$clsid\InprocServer32" -ErrorAction SilentlyContinue).'(default)' }
+Log "[1] CLSID InprocServer32: $inproc"
 if($inproc){ Log ("[1] thumb dll exists: " + (Test-Path $inproc)) }
 $dir = $null
 if($inproc -and (Test-Path $inproc)){ $dir = Split-Path $inproc }

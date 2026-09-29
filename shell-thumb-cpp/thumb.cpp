@@ -112,6 +112,18 @@ static bool isVideoExtUtf8(const char* path) {
     return isVideoExt(w);
 }
 
+// 容器 magic 嗅探：某些 Shell 绑定给 stream 的名字是 GUID（无扩展名），
+// 单靠名字会把 mp4 误判进 PSD 分支——按字节特征兜底识别视频容器
+static bool sniffVideoMagic(const unsigned char* p, size_t n) {
+    if (n >= 12 && !memcmp(p + 4, "ftyp", 4)) return true;          // mp4/m4v/mov
+    if (n >= 12 && !memcmp(p, "RIFF", 4) && !memcmp(p + 8, "AVI ", 4)) return true; // avi
+    static const unsigned char kEbml[] = { 0x1A, 0x45, 0xDF, 0xA3 };
+    if (n >= 4 && !memcmp(p, kEbml, 4)) return true;                // mkv/webm
+    static const unsigned char kAsf[] = { 0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11 };
+    if (n >= 8 && !memcmp(p, kAsf, 8)) return true;                 // wmv (ASF)
+    return false;
+}
+
 // MF RGB32 输出（BGRA、stride 可负=bottom-up）→ 32bpp top-down HBITMAP
 static HBITMAP bgraToHbitmap(const BYTE* src, size_t len, UINT32 w, UINT32 h, LONG stride) {
     if (!w || !h) return nullptr;
@@ -360,6 +372,18 @@ public:
                 const wchar_t* dot = wcsrchr(name, L'.');
                 video = isVideoExt(dot ? dot + 1 : nullptr);
                 CoTaskMemFree(stg.pwcsName);
+            }
+            if (!video) {
+                // 流名无扩展名（GUID 名等）：读 64B 嗅探容器 magic 后回卷到 0
+                unsigned char head[64];
+                ULONG got = 0;
+                LARGE_INTEGER zero = {};
+                stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+                if (SUCCEEDED(stream->Read(head, sizeof(head), &got)) &&
+                    sniffVideoMagic(head, got)) {
+                    video = true;
+                }
+                stream->Seek(zero, STREAM_SEEK_SET, nullptr);
             }
             stream->AddRef();
             if (m_stream) m_stream->Release();

@@ -8,7 +8,7 @@
 
 免费无广 ✦ PSD/PSB 原生支持 ✦ 资源管理器缩略图预览 ✦ 万张图库流畅浏览
 
-[下载最新版](https://gitee.com/wyler_admin/pixlens/releases) · v1.3.1
+[下载最新版](https://gitee.com/wyler_admin/pixlens/releases) · v1.3.2
 
 </div>
 
