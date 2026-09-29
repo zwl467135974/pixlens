@@ -10,6 +10,6 @@ cl /nologo /LD /EHsc /O2 /W3 /utf-8 /Zi /MT /DUNICODE /D_UNICODE ^
    shell-thumb-cpp\thumb.cpp ^
    /Fe:target\release\pixlens_thumb_cpp.dll ^
    /Fo:target\release\pixlens_thumb_cpp.obj ^
-   /link /DEF:shell-thumb-cpp\exports.def /DEBUG gdi32.lib shlwapi.lib ole32.lib user32.lib
+   /link /DEF:shell-thumb-cpp\exports.def /DEBUG gdi32.lib shlwapi.lib ole32.lib user32.lib mfplat.lib mfreadwrite.lib mfuuid.lib propsys.lib uuid.lib
 
 if exist target\release\pixlens_thumb_cpp.dll (echo BUILD_OK) else (echo BUILD_FAILED)

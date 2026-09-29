@@ -50,3 +50,7 @@ foreach ($f in $Files) {
     $r = [ThumbProbe]::Probe($f, $out)
     Write-Output ($r + "`t" + $f + "`t" + $out)
 }
+
+# prove which handler DLL served the extraction (in-process load check)
+$mods = [System.Diagnostics.Process]::GetCurrentProcess().Modules | Where-Object { $_.ModuleName -like "pixlens*" -or $_.ModuleName -like "mf*" }
+foreach ($m in $mods) { Write-Output ("MODULE`t" + $m.ModuleName) }

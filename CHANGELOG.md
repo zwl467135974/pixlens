@@ -2,6 +2,22 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.1（2026-09-29）
+
+### 新增：资源管理器视频缩略图（shell 扩展接管）
+
+v1.3.0 只做了应用内浏览；实测反馈无第三方播放器/解码套件的机器上，Explorer
+自带的视频缩略图（shell32 处理器）对 mp4 全军覆没——本版本由 PixLens 的
+shell 扩展统一接管：
+
+- **接管格式**：MP4 / M4V / MOV / WebM / MKV / AVI / WMV 的资源管理器缩略图
+- **代表帧策略**与应用内一致：Media Foundation + 1s 代表帧 + 旋转自动扶正
+- **接管是可逆的**：安装时备份原 handler 值（升级不覆盖最早原值），
+  卸载时逐格式还原系统默认——不给系统留坑
+- Shell 绑定的 stream 模式（IInitializeWithStream）经
+  MFCreateMFByteStreamOnStreamEx 直读，视频不再整读文件头
+- 修复：DLL 补链 uuid.lib；视频帧超请求尺寸时的 GDI+ 缩放初始化
+
 ## v1.3.0（2026-09-29）
 
 ### 新增：视频文件浏览（MP4 等代表帧缩略图）
