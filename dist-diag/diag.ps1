@@ -1,14 +1,23 @@
-# PixLens Thumbnail Diagnose & Fix (run via PixLensThumbDiag.bat)
+# PixLens Thumbnail Diagnose & Fix v4 (run via 修复缩略图.bat)
 # Report: Desktop\PixLens-thumb-diag.txt
-param([switch]$Fix)
+param([switch]$Fix, [string]$Mp4 = '')
 $ErrorActionPreference = "Continue"
 $report = New-Object System.Collections.Generic.List[string]
 function Log($s){ $report.Add($s); Write-Host $s }
 
-Log "==== PixLens Thumbnail Diagnostics ===="
+Log "==== PixLens Thumbnail Diagnostics v4 ===="
 Log "Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Log "User: $env:USERNAME  Machine: $env:COMPUTERNAME"
 Log "OS: $([Environment]::OSVersion.VersionString)"
+
+# 0. installed version (video thumbnails need >= 1.3.1)
+$ver = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PixLens" -ErrorAction SilentlyContinue).DisplayVersion
+if(-not $ver){ $ver = (Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PixLens" -ErrorAction SilentlyContinue).DisplayVersion }
+$verNote = ''
+if(-not $ver){ $verNote = '  <-- NOT INSTALLED' }
+elseif([version]$ver -lt [version]'1.3.1'){ $verNote = '  <-- TOO OLD: video thumbnails need 1.3.1+' }
+Log ""
+Log "[0] PixLens version: $ver$verNote"
 
 $clsid = '{2B2E7C27-BC52-4521-9A56-87BC2DFC7639}'
 $TestPsdB64 = @'
@@ -46,20 +55,24 @@ Log "[2] CLSID registered: HKCU=$(Test-Path "HKCU:\Software\Classes\CLSID\$clsid
 # 3. association chain (ProgID precedence!)
 Log ""
 Log "[3] Association chain:"
-foreach($ext in @('.psd','.psb')){
+foreach($ext in @('.psd','.psb','.mp4','.mov')){
   $hkcuExt = (Get-ItemProperty "HKCU:\Software\Classes\$ext" -ErrorAction SilentlyContinue).'(default)'
   $hkcrExt = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\$ext" -ErrorAction SilentlyContinue).'(default)'
   $uc = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$ext\UserChoice" -ErrorAction SilentlyContinue).ProgId
   Log "  $ext : HKCU-default=$hkcuExt  HKCR-default=$hkcrExt  UserChoice=$uc"
-  $prog = if($uc){$uc}elseif($hkcuExt){$hkcuExt}elseif($hkcrExt){$hkcrExt}else{$null}
+  $prog = if($uc){$uc}elseif($hkcuExt){$hkcuExt}else{$hkcrExt}
   if($prog){
     $pSh = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\$prog\shellex\$thumbKey" -ErrorAction SilentlyContinue).'(default)'
     $note = ''
-    if($pSh -and $pSh -ne $clsid){ $note = '  <-- OTHER HANDLER OVERRIDES OURS' }
+    if($pSh -and $pSh -ne $clsid){ $note = '  <-- OTHER HANDLER SHADOWS OURS (key finding)' }
     Log "  winning ProgID = $prog ; its shellex = $pSh$note"
   }
-  $eSh = (Get-ItemProperty "HKCU:\Software\Classes\$ext\shellex\$thumbKey" -ErrorAction SilentlyContinue).'(default)'
-  Log "  extension-level shellex (ours) = $eSh"
+  $eShHkcu = (Get-ItemProperty "HKCU:\Software\Classes\$ext\shellex\$thumbKey" -ErrorAction SilentlyContinue).'(default)'
+  $eShHklm = (Get-ItemProperty "HKLM:\Software\Classes\$ext\shellex\$thumbKey" -ErrorAction SilentlyContinue).'(default)'
+  $enote = ''
+  if($eShHkcu -ne $clsid -and $eShHklm -ne $clsid){ $enote = '  <-- OUR TAKEOVER MISSING (need 1.3.1 install or -Fix)' }
+  elseif($eShHkcu -eq $clsid -and $eShHklm -ne $clsid){ $enote = '  (HKCU only: invisible to SYSTEM surrogate contexts)' }
+  Log "  extension-level shellex: HKCU=$eShHkcu  HKLM=$eShHklm$enote"
 }
 
 # 4. explorer settings
@@ -122,7 +135,55 @@ elseif($hr -eq 0x8004B200){ $verdict = 'handler-invoked but FAILED (registration
 elseif($hr -eq 0x80070057){ $verdict = 'E_INVALIDARG (shell refused)' }
 elseif($hr -eq 0x80004005){ $verdict = 'E_FAIL' }
 elseif($hr -eq 0x80040154){ $verdict = 'REGDB_E_CLASSNOTREG (CLSID lookup/load FAILED - policy or bitness)' }
-Log ("  GetImage hr = 0x{0:X8}  {1}" -f $hr, $verdict)
+Log ("  PSD  GetImage hr = 0x{0:X8}  {1}" -f $hr, $verdict)
+
+# 6a. real mp4 extraction test (copy to test dir = no stale thumbnail cache)
+Log ""
+Log "[6a] Video thumbnail test:"
+$testMp4 = Join-Path $testDir 'pixlens_test.mp4'
+$srcMp4 = $null
+if($Mp4 -and (Test-Path -LiteralPath $Mp4)){ $srcMp4 = Get-Item -LiteralPath $Mp4 }
+if(-not $srcMp4){
+  $cands = @()
+  foreach($root in @([Environment]::GetFolderPath('Desktop'), "$env:USERPROFILE\Videos", "$env:USERPROFILE\Downloads")){
+    if(Test-Path -LiteralPath $root){
+      $cands += Get-ChildItem -LiteralPath $root -Recurse -Depth 2 -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.mp4','.mov' -and $_.Length -lt 60MB }
+    }
+  }
+  $srcMp4 = $cands | Select-Object -First 1
+}
+if($srcMp4){
+  Copy-Item -LiteralPath $srcMp4.FullName -Destination $testMp4 -Force
+  Log ("  sample: {0} ({1:N0} KB)" -f $srcMp4.Name, ($srcMp4.Length/1KB))
+  $pngv = Join-Path $testDir 'result_mp4.png'
+  if(Test-Path $pngv){ Remove-Item $pngv -Force }
+  $hrv = -1
+  try { $hrv = [PXD]::Extract($testMp4, 256, $pngv) } catch { Log ("  EX: " + $_.Exception.Message) }
+  $vv = if($hrv -eq 0 -and (Test-Path $pngv)){'SUCCESS'}
+        elseif($hrv -eq 0x80040154){'REGDB_E_CLASSNOTREG - our handler not visible in this context'}
+        elseif($hrv -eq 0x80004005){'E_FAIL - handler invoked but decode failed (MF / codec?)'}
+        elseif($hrv -eq 0x80070057){'E_INVALIDARG'}
+        else {'see hr'}
+  Log ("  MP4  GetImage hr = 0x{0:X8}  {1}" -f $hrv, $vv)
+} else { Log "  no mp4 sample found; rerun: powershell -File diag.ps1 -Mp4 'C:\path\to\a.mp4'" }
+
+# 6a-2. Media Foundation availability (Windows N editions lack it)
+Log ""
+Log "[6a2] Media Foundation:"
+Log ("  mfplat.dll in System32: " + (Test-Path "$env:SystemRoot\System32\mfplat.dll"))
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class PXM {
+  [DllImport("mfplat.dll")] public static extern int MFStartup(uint version, uint flags);
+  [DllImport("mfplat.dll")] public static extern void MFShutdown();
+}
+"@
+try {
+  $mfhr = [PXM]::MFStartup(0x20070, 0)
+  if($mfhr -eq 0){ Log "  MFStartup OK"; [PXM]::MFShutdown() }
+  else { Log ("  MFStartup FAILED hr=0x{0:X8}  <-- NO MEDIA FOUNDATION (Windows N?) - video thumbs impossible here" -f $mfhr) }
+} catch { Log "  MFStartup EX: $($_.Exception.Message)  <-- mfplat missing/blocked" }
 
 # 6b. deep probe: bitness, LoadLibrary, direct COM activation, policy
 Log ""
@@ -187,20 +248,38 @@ if($Fix){
   Log ""
   Log "[7] FIX applied:"
   if($dir -and (Test-Path (Join-Path $dir 'pixlens_thumb_cpp.dll'))){
+    $exts = @('.psd','.psb','.mp4','.m4v','.mov','.webm','.mkv','.avi','.wmv')
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $bkRoot = if($isAdmin){ 'HKLM:\Software\PixLens\ThumbBackup' } else { 'HKCU:\Software\PixLens\ThumbBackup' }
+    # backup original handler value once (installer already backups; never overwrite)
+    function Backup-Thumb($name){
+      $k = Join-Path $bkRoot $name
+      if(-not (Test-Path $bkRoot)){ New-Item -Path $bkRoot -Force | Out-Null }
+      $have = (Get-ItemProperty $bkRoot -Name $name -ErrorAction SilentlyContinue).$name
+      if($null -ne $have){ return }
+      $old = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\$name\shellex\$thumbKey" -ErrorAction SilentlyContinue).'(default)'
+      New-ItemProperty -Path $bkRoot -Name $name -Value $(if($old -and $old -ne $clsid){$old}else{'(none)'}) -PropertyType String -Force | Out-Null
+    }
     New-Item -Path "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" -Force | Out-Null
     Set-ItemProperty "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" '(default)' (Join-Path $dir 'pixlens_thumb_cpp.dll')
     New-ItemProperty -Path "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" -Name 'ThreadingModel' -Value 'Apartment' -PropertyType String -Force | Out-Null
     Log "  CLSID re-registered -> $dir"
-    foreach($ext in @('.psd','.psb')){
+    foreach($ext in $exts){
+      Backup-Thumb $ext.TrimStart('.')
       New-Item -Path "HKCU:\Software\Classes\$ext\shellex\$thumbKey" -Force | Out-Null
       Set-ItemProperty "HKCU:\Software\Classes\$ext\shellex\$thumbKey" '(default)' $clsid
+      # ProgID-level shadow fix: a player's ProgID handler outranks extension-level
       $hkcuExt = (Get-ItemProperty "HKCU:\Software\Classes\$ext" -ErrorAction SilentlyContinue).'(default)'
       $uc = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$ext\UserChoice" -ErrorAction SilentlyContinue).ProgId
       $hkcrExt = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\$ext" -ErrorAction SilentlyContinue).'(default)'
       foreach($prog in @($uc,$hkcuExt,$hkcrExt) | Where-Object { $_ } | Select-Object -Unique){
+        $pShOld = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\$prog\shellex\$thumbKey" -ErrorAction SilentlyContinue).'(default)'
+        if($pShOld -and $pShOld -ne $clsid){
+          Backup-Thumb "$($ext.TrimStart('.'))_progid_$prog"
+          Log "  ProgID shadow fix: $prog had $pShOld -> ours"
+        }
         New-Item -Path "HKCU:\Software\Classes\$prog\shellex\$thumbKey" -Force | Out-Null
         Set-ItemProperty "HKCU:\Software\Classes\$prog\shellex\$thumbKey" '(default)' $clsid
-        Log "  shellex registered under ProgID: $prog"
       }
       Log "  shellex registered under extension: $ext"
     }
@@ -210,7 +289,6 @@ if($Fix){
     # machine-wide HKLM registration: shell thumbnail extraction may run in a
     # context where HKCU is NOT visible (SYSTEM surrogate / other account's
     # Explorer) -- HKLM is what commercial shell extensions (Adobe etc.) use
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if($isAdmin){
       try {
         $dllFull = (Get-ItemProperty "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32" -ErrorAction SilentlyContinue).'(default)'
@@ -218,9 +296,16 @@ if($Fix){
         New-Item -Path "HKLM:\Software\Classes\CLSID\$clsid\InprocServer32" -Force | Out-Null
         Set-ItemProperty "HKLM:\Software\Classes\CLSID\$clsid\InprocServer32" '(default)' $dllFull
         New-ItemProperty -Path "HKLM:\Software\Classes\CLSID\$clsid\InprocServer32" -Name 'ThreadingModel' -Value 'Apartment' -PropertyType String -Force | Out-Null
-        foreach($ext in @('.psd','.psb')){
+        foreach($ext in $exts){
           New-Item -Path "HKLM:\Software\Classes\$ext\shellex\$thumbKey" -Force | Out-Null
           Set-ItemProperty "HKLM:\Software\Classes\$ext\shellex\$thumbKey" '(default)' $clsid
+          $hkcuExt2 = (Get-ItemProperty "HKCU:\Software\Classes\$ext" -ErrorAction SilentlyContinue).'(default)'
+          $uc2 = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$ext\UserChoice" -ErrorAction SilentlyContinue).ProgId
+          $hkcrExt2 = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\$ext" -ErrorAction SilentlyContinue).'(default)'
+          foreach($prog in @($uc2,$hkcuExt2,$hkcrExt2) | Where-Object { $_ } | Select-Object -Unique){
+            New-Item -Path "HKLM:\Software\Classes\$prog\shellex\$thumbKey" -Force | Out-Null
+            Set-ItemProperty "HKLM:\Software\Classes\$prog\shellex\$thumbKey" '(default)' $clsid
+          }
         }
         Log "  HKLM machine-wide registration written -> $dllFull (visible to ALL contexts/users)"
       } catch { Log "  HKLM write FAILED: $($_.Exception.Message)" }
@@ -229,7 +314,15 @@ if($Fix){
     $hr2 = -1
     try { $hr2 = [PXD]::Extract($testPsd, 256, $png) } catch {}
     $v2 = if($hr2 -eq 0 -and (Test-Path $png)){'SUCCESS after fix'}else{'still failing - SEND REPORT BACK'}
-    Log ("  retest hr = 0x{0:X8}  {1}" -f $hr2, $v2)
+    Log ("  PSD retest hr = 0x{0:X8}  {1}" -f $hr2, $v2)
+    if(Test-Path $testMp4){
+      $pngv2 = Join-Path $testDir 'result_mp4.png'
+      if(Test-Path $pngv2){ Remove-Item $pngv2 -Force }
+      $hrv2 = -1
+      try { $hrv2 = [PXD]::Extract($testMp4, 256, $pngv2) } catch {}
+      $vv2 = if($hrv2 -eq 0 -and (Test-Path $pngv2)){'SUCCESS after fix'}else{'still failing - SEND REPORT BACK'}
+      Log ("  MP4 retest hr = 0x{0:X8}  {1}" -f $hrv2, $vv2)
+    }
 
     # fallback: relocate DLLs to an ASCII-safe path under LOCALAPPDATA and re-register
     if(-not ($hr2 -eq 0 -and (Test-Path $png))){
@@ -252,7 +345,15 @@ if($Fix){
         $hr3 = -1
         try { $hr3 = [PXD]::Extract($testPsd, 256, $png) } catch {}
         $v3 = if($hr3 -eq 0 -and (Test-Path $png)){'SUCCESS after relocation'}else{'still failing - SEND REPORT BACK'}
-        Log ("  retest hr = 0x{0:X8}  {1}" -f $hr3, $v3)
+        Log ("  PSD retest hr = 0x{0:X8}  {1}" -f $hr3, $v3)
+        if(Test-Path $testMp4){
+          $pngv3 = Join-Path $testDir 'result_mp4.png'
+          if(Test-Path $pngv3){ Remove-Item $pngv3 -Force }
+          $hrv3 = -1
+          try { $hrv3 = [PXD]::Extract($testMp4, 256, $pngv3) } catch {}
+          $vv3 = if($hrv3 -eq 0 -and (Test-Path $pngv3)){'SUCCESS after relocation'}else{'still failing - SEND REPORT BACK'}
+          Log ("  MP4 retest hr = 0x{0:X8}  {1}" -f $hrv3, $vv3)
+        }
       }
     }
   } else { Log "  fix skipped: install dir or dll not found" }
