@@ -2,8 +2,8 @@ param()
 $ErrorActionPreference = 'Stop'
 $token = '3bf2e142eb65e3b249e1bf4154d8c909'
 $repo = 'wyler_admin/pixlens'
-$tag = 'v1.3.3'
-$name = 'PixLens v1.3.3'
+$tag = 'v1.3.4'
+$name = 'PixLens v1.3.4'
 # ASCII-safe body (Gitee API encoding); CRLF to keep markdown line breaks
 $body = "## Explorer video thumbnails (shell extension)`r`n`r`n- MP4 / M4V / MOV / WebM / MKV / AVI / WMV now show a representative frame (1s) with a play badge in the thumbnail grid`r`n- Portrait rotation metadata is applied automatically`r`n- Double-click / Space opens the file with the system default player`r`n- Batch convert and Compare automatically skip videos`r`n- Thumbnails share the existing disk cache (~4ms warm)`r`n`r`nNote: Explorer thumbnails for MP4 are handled by Windows itself and are not affected."
 
@@ -38,14 +38,14 @@ Write-Output ("CREATED id=" + $id)
 $response = $text
 
 # attach installer
-$exe = 'D:\work\pixlens\target\release\bundle\nsis\PixLens_1.3.3_x64-setup.exe'
+$exe = 'D:\work\pixlens\target\release\bundle\nsis\PixLens_1.3.4_x64-setup.exe'
 $boundary = '----pixlensboundary' + [DateTime]::Now.Ticks
 $uri = "https://gitee.com/api/v5/repos/$repo/releases/$id/attach_files?access_token=$token"
 $req2 = [System.Net.HttpWebRequest]::Create($uri)
 $req2.Method = 'POST'
 $req2.ContentType = "multipart/form-data; boundary=$boundary"
 $fs = [IO.File]::OpenRead($exe)
-$head = ("--$boundary`r`nContent-Disposition: form-data; name=`"file`"; filename=`"PixLens_1.3.3_x64-setup.exe`"`r`nContent-Type: application/octet-stream`r`n`r`n").Replace('\"','"')
+$head = ("--$boundary`r`nContent-Disposition: form-data; name=`"file`"; filename=`"PixLens_1.3.4_x64-setup.exe`"`r`nContent-Type: application/octet-stream`r`n`r`n").Replace('\"','"')
 $headBytes = [Text.Encoding]::UTF8.GetBytes($head)
 $tailBytes = [Text.Encoding]::UTF8.GetBytes("`r`n--$boundary--`r`n")
 $req2.ContentLength = $headBytes.Length + $fs.Length + $tailBytes.Length
