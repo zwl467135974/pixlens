@@ -280,7 +280,8 @@ export class Grid {
         const resp = await fetch(key);
         if (!resp.ok) return;
         const blob = await resp.blob();
-        const bmp = await createImageBitmap(blob);
+        // SVG：createImageBitmap 不支持矢量 blob，兜底经 <img> 栅格化（与查看器同路）
+        const bmp = await createImageBitmap(blob).catch(() => decodeViaImg(blob));
         // LRU 淘汰（淘汰即释放）
         this.bitmaps.delete(key);
         this.bitmaps.set(key, { bmp, at: performance.now() });
@@ -298,5 +299,31 @@ export class Grid {
         this.inflight.delete(key);
       }
     })();
+  }
+}
+
+/** createImageBitmap 不支持的格式（SVG 矢量）：经 <img> 解码后转位图，统一进 LRU 管线 */
+async function decodeViaImg(blob: Blob): Promise<ImageBitmap> {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.decoding = "async";
+    img.src = url;
+    await img.decode();
+    if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+      return await createImageBitmap(img);
+    }
+    // 无内在尺寸的 SVG（仅 viewBox）：解析 viewBox 定尺寸，canvas 显式栅格化
+    const text = await blob.text();
+    const m = /viewBox\s*=\s*["']\s*[\d.eE+-]+\s+[\d.eE+-]+\s+([\d.eE+-]+)\s+([\d.eE+-]+)/.exec(text);
+    const w = m ? Math.max(1, Math.round(Number(m[1]))) : 512;
+    const h = m ? Math.max(1, Math.round(Number(m[2]))) : 512;
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    c.getContext("2d")!.drawImage(img, 0, 0, w, h);
+    return await createImageBitmap(c);
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
