@@ -384,6 +384,7 @@ pub fn run() {
             settings::get_settings,
             settings::set_settings,
             settings::remember_folder,
+            settings::mark_thumb_hint_shown,
             get_bench_config,
             get_launch_file,
             path_is_dir,

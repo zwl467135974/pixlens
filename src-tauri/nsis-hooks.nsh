@@ -1,5 +1,16 @@
 ; Tauri NSIS 安装钩子（doc/05 M7：卸载清理缓存目录；注册 PSD/PSB/视频 Explorer 缩略图 COM）
 ; 注意：NSIS 标签在 section 内全局，宏多次展开必须用 IDX 参数保证标签唯一。
+
+; 安装完成页说明（本文件被 include 在 MUI_PAGE_FINISH 之前，define 生效）：
+; Explorer 会缓存缩略图的失败结果，旧文件装完不重试——明示用户刷新方式，
+; 而不是替用户强刷（杀 explorer/清缓存有杀软误报风险）。静默安装无此页，
+; 由应用内一次性横幅兜底提示。
+!ifndef MUI_FINISHPAGE_TEXT
+  !define MUI_FINISHPAGE_TITLE "PixLens 安装完成"
+  !define MUI_FINISHPAGE_TEXT "资源管理器的 PSD / PSB / 视频缩略图已启用。$\r$\n$\r$\n新建或新下载的文件立即显示缩略图。$\r$\n如果之前无法预览的旧文件仍显示图标，是资源管理器缓存了旧结果——重启资源管理器或重启电脑即可刷新。"
+  !define MUI_FINISHPAGE_TEXT_LARGE
+!endif
+
 !macro NSIS_HOOK_PREINSTALL
   ; 释放被占用的文件：运行中的主程序，以及加载了缩略图 DLL 的 COM 代理进程
   ; （DllHost 是无状态代理，Windows 会在下次请求时自动重启，可安全结束）

@@ -300,6 +300,24 @@ function wireUi(): void {
   void listen<FsChanged>("fs-changed", (ev) => patchFs(ev.payload));
 }
 
+/** Explorer 缓存提示（每台机器一次）：旧文件装完不重试是缓存特性，明示刷新方式 */
+function showThumbHintOnce(settings: AppSettings | null): void {
+  if (!settings || settings.thumbHintShown) return;
+  const el = document.createElement("div");
+  el.className = "thumb-hint";
+  el.innerHTML =
+    "<div class='thumb-hint-body'><b>资源管理器缩略图已启用</b>（PSD / PSB / 视频）。" +
+    "新文件立即生效；旧文件如仍显示图标，是资源管理器缓存了旧结果，" +
+    "重启资源管理器或电脑即可刷新。<button class='thumb-hint-ok'>知道了</button></div>";
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("show"));
+  el.querySelector(".thumb-hint-ok")?.addEventListener("click", () => {
+    el.classList.remove("show");
+    window.setTimeout(() => el.remove(), 400);
+    void ipc.markThumbHintShown();
+  });
+}
+
 async function boot(): Promise<void> {
   wireUi();
   // 启动即应用设置（主题 / 默认排序）
@@ -329,6 +347,8 @@ async function boot(): Promise<void> {
     );
     return;
   }
+  // 正常模式：一次性提示 Explorer 缓存特性（横幅，不阻塞）
+  showThumbHintOnce(bootSettings);
   // 双击关联文件启动：打开所在文件夹并直接进入查看器
   const launch = await ipc.getLaunchFile();
   if (launch) {

@@ -979,3 +979,50 @@ body.drag-over::after {
   border-top: 1px solid var(--border);
 }
 #cmp-bar .zoom { color: #9a9ab0; font-size: 12px; }
+
+/* ── Explorer 缓存一次性提示横幅（右下角卡片，不自动消失，用户点"知道了"关闭） ── */
+.thumb-hint {
+  position: fixed;
+  right: 20px;
+  bottom: 52px;
+  z-index: 400;
+  max-width: 380px;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity .35s ease, transform .35s ease;
+  pointer-events: none;
+}
+.thumb-hint.show {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.thumb-hint-body {
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(28, 27, 38, .96);
+  border: 1px solid rgba(108, 102, 232, .45);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+  color: #d8d8e8;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.thumb-hint-body b { color: #a9a3f5; }
+.thumb-hint-ok {
+  display: block;
+  margin-top: 10px;
+  padding: 5px 18px;
+  border: none;
+  border-radius: 6px;
+  background: #6c66e8;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.thumb-hint-ok:hover { background: #7d78ef; }
+:root[data-theme="light"] .thumb-hint-body {
+  background: rgba(252, 252, 255, .97);
+  border-color: rgba(108, 102, 232, .35);
+  color: #3a3a4c;
+}
+:root[data-theme="light"] .thumb-hint-body b { color: #5550cc; }

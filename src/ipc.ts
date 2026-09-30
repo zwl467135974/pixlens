@@ -36,6 +36,8 @@ export interface AppSettings {
   /** Rust 侧维护（窗口几何/上次文件夹），前端只读 */
   window?: unknown;
   lastFolder?: string | null;
+  /** Explorer 缓存提示横幅是否已展示（每台机器一次） */
+  thumbHintShown?: boolean;
 }
 
 export interface RenamePair {
@@ -119,6 +121,7 @@ export const ipc = {
   pathIsDir: (path: string) => invoke<boolean>("path_is_dir", { path }),
   openPath: (path: string) => invoke<void>("open_path", { path }),
   rememberFolder: (path: string) => invoke<void>("remember_folder", { path }),
+  markThumbHintShown: () => invoke<void>("mark_thumb_hint_shown"),
   setWallpaper: (pngB64: string) => invoke<void>("set_wallpaper", { pngB64 }),
   benchMemory: () => invoke<number>("bench_memory"),
 };

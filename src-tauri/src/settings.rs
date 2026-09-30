@@ -20,6 +20,8 @@ pub struct Settings {
     pub window: Option<crate::window_state::WindowGeom>,
     /// 上次浏览的文件夹（启动恢复）
     pub last_folder: Option<String>,
+    /// Explorer 缓存提示横幅已展示过（每台机器一次；旧文件装完不重试是缓存特性）
+    pub thumb_hint_shown: bool,
 }
 
 impl Default for Settings {
@@ -30,6 +32,7 @@ impl Default for Settings {
             theme: "dark".into(),
             window: None,
             last_folder: None,
+            thumb_hint_shown: false,
         }
     }
 }
@@ -79,6 +82,16 @@ pub fn remember_folder(app: tauri::AppHandle, path: String) {
     let mut s = load(&app);
     if s.last_folder.as_deref() != Some(path.as_str()) {
         s.last_folder = Some(path);
+        let _ = save(&app, &s);
+    }
+}
+
+/// Explorer 缓存提示横幅已读（用户点"知道了"；每台机器只展示一次）
+#[tauri::command]
+pub fn mark_thumb_hint_shown(app: tauri::AppHandle) {
+    let mut s = load(&app);
+    if !s.thumb_hint_shown {
+        s.thumb_hint_shown = true;
         let _ = save(&app, &s);
     }
 }
