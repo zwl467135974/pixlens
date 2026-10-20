@@ -2,6 +2,41 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.4.0（2026-10-20）
+
+### 新功能：RAW 相机原片浏览（19 种格式）
+
+CR2 / CR3 / NEF / ARW / DNG / ORF / RW2 / RAF / PEF / SRW / X3F / ERF / MRW /
+KDC / DCR / IIQ / RWL / GPR / 3FR——不装相机厂商软件直接看片选片：
+
+- **libraw-wasm 前端解码**：Rust 端仅做白名单 + 原始字节透传（限流读盘，
+  不做磁盘缓存拷贝）；解码在库内置 Web Worker，**1.4MB wasm 独立 chunk
+  首遇 RAW 才加载**——启动与不看 RAW 的用户零成本
+- 相机白平衡 + 相机色彩矩阵 + sRGB 8bit 输出，还原拍摄观感；缩略图走
+  halfSize（快约 4 倍）+ 缩放入 LRU，查看器大图按需全尺寸
+- 实测（10MB 级样片）：网格缩略图与查看器均正常解码显示，读盘透传 ~6ms，
+  解码全程不卡 UI
+
+### 新功能：默认看图软件一键注册 / 取消
+
+设置面板新增"默认看图软件"（33 种图片格式，含 PSD/RAW）：
+
+- **注册**：HKCU 级注册 ProgId + 打开方式候选 + 系统默认应用列表
+  （Capabilities/RegisteredApplications）；`.ext` 原默认值自动备份，
+  升级重装不覆盖
+- **设为默认**：跳转系统"默认应用"设置页由用户一键确认——Windows 10/11
+  不允许程序直写默认关联（hash 校验 + 杀软盯防），此为 Chrome/Firefox 同款
+  方案；无 UserChoice 的格式注册后直接生效
+- **取消注册并还原**：候选值/ProgId/Capabilities 全清，`.ext` 默认值从
+  备份还原，指向 PixLens 的 UserChoice 删除（系统自动回落）
+- NSIS 卸载同步还原全部关联注册，不留残余
+- 实测全链路：注册 → 系统设置设默认 → 双击由 PixLens 打开 → 取消 →
+  双击回落系统照片 App，注册表逐项核验干净
+
+### 修复
+
+- NSIS 卸载钩子一处行粘连（编辑事故）导致打包失败，已修复
+
 ## v1.3.4（2026-09-30）
 
 ### 修复：SVG 在缩略图墙不显示（大图查看正常）
