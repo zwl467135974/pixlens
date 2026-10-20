@@ -2,10 +2,10 @@ param()
 $ErrorActionPreference = 'Stop'
 $token = '3bf2e142eb65e3b249e1bf4154d8c909'
 $repo = 'wyler_admin/pixlens'
-$tag = 'v1.3.4'
-$name = 'PixLens v1.3.4'
+$tag = 'v1.4.0'
+$name = 'PixLens v1.4.0'
 # ASCII-safe body (Gitee API encoding); CRLF to keep markdown line breaks
-$body = "## Explorer video thumbnails (shell extension)`r`n`r`n- MP4 / M4V / MOV / WebM / MKV / AVI / WMV now show a representative frame (1s) with a play badge in the thumbnail grid`r`n- Portrait rotation metadata is applied automatically`r`n- Double-click / Space opens the file with the system default player`r`n- Batch convert and Compare automatically skip videos`r`n- Thumbnails share the existing disk cache (~4ms warm)`r`n`r`nNote: Explorer thumbnails for MP4 are handled by Windows itself and are not affected."
+$body = "## RAW camera files (19 formats)`r`n`r`n- CR2 / CR3 / NEF / ARW / DNG / ORF / RW2 / RAF / PEF / SRW / X3F / ERF / MRW / KDC / DCR / IIQ / RWL / GPR / 3FR are now viewable without camera vendor software`r`n- Decoded with libraw-wasm in a Web Worker (1.4MB wasm loaded on first RAW file - zero cost at startup)`r`n- Camera white balance + camera color matrix + sRGB 8-bit output; thumbnails use halfSize decoding (~4x faster)`r`n- Rust side only passes raw bytes through with disk-read throttling (~6ms for a 10MB file)`r`n`r`n## Default image viewer (one click)`r`n`r`n- New section in Settings: register/unregister as the system image viewer candidate (33 image formats incl. PSD/RAW)`r`n- Register: HKCU ProgId + Open With list + Windows Default Apps entry; original .ext defaults are backed up and fully restored on unregister`r`n- Set as default opens Windows Settings (ms-settings:defaultapps) for one-click confirmation - same flow as Chrome/Firefox (Windows 10/11 requires user confirmation)`r`n- Uninstall cleans up all association registrations`r`n`r`nNote: after unregistering, Windows picks a new default app automatically (it cannot be programmatically rolled back to the exact previous default - Windows limitation)."
 
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $req = [System.Net.HttpWebRequest]::Create("https://gitee.com/api/v5/repos/$repo/releases")
@@ -38,14 +38,14 @@ Write-Output ("CREATED id=" + $id)
 $response = $text
 
 # attach installer
-$exe = 'D:\work\pixlens\target\release\bundle\nsis\PixLens_1.3.4_x64-setup.exe'
+$exe = 'D:\work\pixlens\target\release\bundle\nsis\PixLens_1.4.0_x64-setup.exe'
 $boundary = '----pixlensboundary' + [DateTime]::Now.Ticks
 $uri = "https://gitee.com/api/v5/repos/$repo/releases/$id/attach_files?access_token=$token"
 $req2 = [System.Net.HttpWebRequest]::Create($uri)
 $req2.Method = 'POST'
 $req2.ContentType = "multipart/form-data; boundary=$boundary"
 $fs = [IO.File]::OpenRead($exe)
-$head = ("--$boundary`r`nContent-Disposition: form-data; name=`"file`"; filename=`"PixLens_1.3.4_x64-setup.exe`"`r`nContent-Type: application/octet-stream`r`n`r`n").Replace('\"','"')
+$head = ("--$boundary`r`nContent-Disposition: form-data; name=`"file`"; filename=`"PixLens_1.4.0_x64-setup.exe`"`r`nContent-Type: application/octet-stream`r`n`r`n").Replace('\"','"')
 $headBytes = [Text.Encoding]::UTF8.GetBytes($head)
 $tailBytes = [Text.Encoding]::UTF8.GetBytes("`r`n--$boundary--`r`n")
 $req2.ContentLength = $headBytes.Length + $fs.Length + $tailBytes.Length
