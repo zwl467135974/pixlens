@@ -5,6 +5,7 @@
  * 不用 <img>（Chromium 对滚动过的解码位图无上限保留）。
  */
 import { thumbUrl, type Entry } from "../ipc";
+import { decodeRawThumb, isRawExt } from "../raw";
 
 const BUFFER_ROWS = 2;
 /** 解码位图 LRU 容量（128px 位图 ≈ 64KB，400 张 ≈ 26MB） */
@@ -280,8 +281,14 @@ export class Grid {
         const resp = await fetch(key);
         if (!resp.ok) return;
         const blob = await resp.blob();
-        // SVG：createImageBitmap 不支持矢量 blob，兜底经 <img> 栅格化（与查看器同路）
-        const bmp = await createImageBitmap(blob).catch(() => decodeViaImg(blob));
+        // RAW：thumb 协议透传字节 → libraw-wasm 半尺寸解码（LRU 里只存缩后位图）
+        let bmp: ImageBitmap;
+        if (isRawExt(e.ext)) {
+          bmp = await decodeRawThumb(await blob.arrayBuffer(), Math.max(512, this.tileSize * 2));
+        } else {
+          // SVG：createImageBitmap 不支持矢量 blob，兜底经 <img> 栅格化（与查看器同路）
+          bmp = await createImageBitmap(blob).catch(() => decodeViaImg(blob));
+        }
         // LRU 淘汰（淘汰即释放）
         this.bitmaps.delete(key);
         this.bitmaps.set(key, { bmp, at: performance.now() });

@@ -6,7 +6,8 @@
  * - GIF：叠加层 <img> 播放动画（Canvas 不做帧动画），共用同一套变换
  * - 翻页预取：当前 ±2 张预览解码进内存 LRU（容量 8）
  */
-import { fmtSize, imageUrl, ipc, type Entry } from "../ipc";
+import { fmtSize, imageUrl, ipc, thumbUrl, type Entry } from "../ipc";
+import { decodeRaw, isRawExt } from "../raw";
 
 const IMAGE_BASE = "http://image.localhost/pixlens";
 export const PREVIEW_MAX_DIM = 2560;
@@ -964,12 +965,38 @@ export class Viewer {
 const inflight = new Map<string, Promise<Frame>>();
 
 export function loadFrame(entry: Entry, maxDim: number, page: number, exposure: number): Promise<Frame> {
+  // 相机 RAW：不走 image://（Rust 不解码 RAW），thumb 协议透传字节 + 前端 libraw-wasm 解码
+  if (isRawExt(entry.ext)) {
+    const key = `raw:${entry.path}:${maxDim}`;
+    const existing = inflight.get(key);
+    if (existing) return existing;
+    const p = doLoadRawFrame(entry, maxDim).finally(() => inflight.delete(key));
+    inflight.set(key, p);
+    return p;
+  }
   const url = imageUrl(entry, maxDim, page, exposure);
   const existing = inflight.get(url);
   if (existing) return existing;
   const p = doLoadFrame(entry, maxDim, url).finally(() => inflight.delete(url));
   inflight.set(url, p);
   return p;
+}
+
+/** RAW 帧：maxDim>0 半尺寸预览（LOD），maxDim=0 全尺寸；半尺寸×2 近似原始基准 */
+async function doLoadRawFrame(entry: Entry, maxDim: number): Promise<Frame> {
+  const resp = await fetch(thumbUrl(entry, 0));
+  if (!resp.ok) throw new Error(`RAW 请求失败: ${resp.status}`);
+  const buf = await resp.arrayBuffer();
+  const full = maxDim === 0;
+  const { bmp, width, height } = await decodeRaw(buf, !full);
+  return {
+    src: { kind: "bitmap", bmp },
+    naturalW: full ? width : width * 2,
+    naturalH: full ? height : height * 2,
+    nativeW: width,
+    isFull: full,
+    pages: null,
+  };
 }
 
 async function doLoadFrame(entry: Entry, maxDim: number, url: string): Promise<Frame> {

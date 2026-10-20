@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
-    "@tauri-apps/plugin-dialog": "^2.0.0"
+    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "libraw-wasm": "1.6.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",

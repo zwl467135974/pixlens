@@ -50,6 +50,26 @@
     DeleteRegValue ${BACKUPROOT} "Software\PixLens\ThumbBackup" "${EXTNAME}"
 !macroend
 
+; ── 默认看图软件关联卸载还原（v1.4.0）──────────────────────────
+; 应用内"注册为看图候选"（assoc.rs）写入的关联：HKCU 级，卸载时还原——
+; 删打开方式候选值 / 还原 .ext 原默认值（AssocBackup 备份，"(none)"=原本无值）/
+; 删指向 PixLens.Image 的 UserChoice（删键是系统允许操作，回落"选择打开方式"）。
+!macro PIX_ASSOC_CLEANUP EXTNAME IDX
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.${EXTNAME}\UserChoice" "ProgId"
+  StrCmp $0 "PixLens.Image" 0 pix_ac_uc_${IDX}
+    DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.${EXTNAME}\UserChoice"
+  pix_ac_uc_${IDX}:
+  DeleteRegValue HKCU "Software\Classes\.${EXTNAME}\OpenWithProgids" "PixLens.Image"
+  ReadRegStr $0 HKCU "Software\PixLens\AssocBackup" ".${EXTNAME}"
+  StrCmp $0 "" pix_ac_done_${IDX}
+  StrCmp $0 "(none)" 0 pix_ac_set_${IDX}
+    DeleteRegValue HKCU "Software\Classes\.${EXTNAME}" ""
+    Goto pix_ac_done_${IDX}
+  pix_ac_set_${IDX}:
+    WriteRegStr HKCU "Software\Classes\.${EXTNAME}" "" "$0"
+  pix_ac_done_${IDX}:
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   ; ── PSD/PSB/视频 资源管理器缩略图 COM 注册 ──
   ; CLSID {2B2E7C27-BC52-4521-9A56-87BC2DFC7639}，与 shell-thumb-cpp/thumb.cpp 保持一致。
@@ -99,8 +119,7 @@
 
 !macro NSIS_HOOK_POSTUNINSTALL
   ; 删除缩略图 COM 注册并恢复视频扩展的原 handler（HKCU + 管理员时一并清理 HKLM）
-  DeleteRegKey HKCU "Software\Classes\CLSID\{2B2E7C27-BC52-4521-9A56-87BC2DFC7639}"
-  DeleteRegKey HKCU "Software\Classes\.psd\shellex\{E357FCCD-A995-4576-B01F-234630154E96}"
+  DeleteRegKey HKCU "Software\Classes\CLSID\{2B2E7C27-BC52-4521-9A56-87BC2DFC7639}"  DeleteRegKey HKCU "Software\Classes\.psd\shellex\{E357FCCD-A995-4576-B01F-234630154E96}"
   DeleteRegKey HKCU "Software\Classes\.psb\shellex\{E357FCCD-A995-4576-B01F-234630154E96}"
   DeleteRegKey HKCU "Software\Classes\PSD 图像\shellex\{E357FCCD-A995-4576-B01F-234630154E96}"
   DeleteRegKey HKCU "Software\Classes\PSB 图像\shellex\{E357FCCD-A995-4576-B01F-234630154E96}"
@@ -125,6 +144,44 @@
   !insertmacro PIX_RESTORE_VIDEO "avi"  46 HKLM HKLM
   !insertmacro PIX_RESTORE_VIDEO "wmv"  47 HKLM HKLM
   pix_unhklm_skip:
+  ; 还原应用内注册的默认看图软件关联（33 种图片格式，HKCU 级）
+  !insertmacro PIX_ASSOC_CLEANUP "jpg"   51
+  !insertmacro PIX_ASSOC_CLEANUP "jpeg"  52
+  !insertmacro PIX_ASSOC_CLEANUP "png"   53
+  !insertmacro PIX_ASSOC_CLEANUP "gif"   54
+  !insertmacro PIX_ASSOC_CLEANUP "webp"  55
+  !insertmacro PIX_ASSOC_CLEANUP "bmp"   56
+  !insertmacro PIX_ASSOC_CLEANUP "ico"   57
+  !insertmacro PIX_ASSOC_CLEANUP "avif"  58
+  !insertmacro PIX_ASSOC_CLEANUP "svg"   59
+  !insertmacro PIX_ASSOC_CLEANUP "tif"   60
+  !insertmacro PIX_ASSOC_CLEANUP "tiff"  61
+  !insertmacro PIX_ASSOC_CLEANUP "psd"   62
+  !insertmacro PIX_ASSOC_CLEANUP "psb"   63
+  !insertmacro PIX_ASSOC_CLEANUP "hdr"   64
+  !insertmacro PIX_ASSOC_CLEANUP "cr2"   65
+  !insertmacro PIX_ASSOC_CLEANUP "cr3"   66
+  !insertmacro PIX_ASSOC_CLEANUP "nef"   67
+  !insertmacro PIX_ASSOC_CLEANUP "arw"   68
+  !insertmacro PIX_ASSOC_CLEANUP "dng"   69
+  !insertmacro PIX_ASSOC_CLEANUP "orf"   70
+  !insertmacro PIX_ASSOC_CLEANUP "rw2"   71
+  !insertmacro PIX_ASSOC_CLEANUP "raf"   72
+  !insertmacro PIX_ASSOC_CLEANUP "pef"   73
+  !insertmacro PIX_ASSOC_CLEANUP "srw"   74
+  !insertmacro PIX_ASSOC_CLEANUP "x3f"   75
+  !insertmacro PIX_ASSOC_CLEANUP "erf"   76
+  !insertmacro PIX_ASSOC_CLEANUP "mrw"   77
+  !insertmacro PIX_ASSOC_CLEANUP "kdc"   78
+  !insertmacro PIX_ASSOC_CLEANUP "dcr"   79
+  !insertmacro PIX_ASSOC_CLEANUP "iiq"   80
+  !insertmacro PIX_ASSOC_CLEANUP "rwl"   81
+  !insertmacro PIX_ASSOC_CLEANUP "gpr"   82
+  !insertmacro PIX_ASSOC_CLEANUP "3fr"   83
+  DeleteRegKey HKCU "Software\PixLens\Capabilities"
+  DeleteRegValue HKCU "Software\RegisteredApplications" "PixLens"
+  DeleteRegKey HKCU "Software\Classes\PixLens.Image"
+  DeleteRegKey HKCU "Software\PixLens\AssocBackup"
   DeleteRegKey HKCU "Software\PixLens\ThumbBackup"
   DeleteRegKey HKLM "Software\PixLens\ThumbBackup"
   ; 删除缩略图/预览磁盘缓存与设置

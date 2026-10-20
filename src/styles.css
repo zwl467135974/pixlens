@@ -683,6 +683,32 @@ body {
   color: var(--fg);
 }
 
+#settings-panel .sp-assoc-btns {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+#settings-panel .sp-btn {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#settings-panel .sp-btn:hover:not(:disabled) {
+  border-color: var(--accent, #4c8dff);
+}
+
+#settings-panel .sp-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* ── 滚动条 ─────────────────────────── */
 #grid::-webkit-scrollbar {
   width: 12px;

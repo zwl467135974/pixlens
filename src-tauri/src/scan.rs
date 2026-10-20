@@ -12,11 +12,23 @@ use serde::Serialize;
 use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
 
-/// 图片扩展名白名单（小写）
+/// 图片扩展名白名单（小写）；RAW 相机格式亦按图片处理（解码在前端 libraw-wasm）
 pub const IMAGE_EXTS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "avif", "svg", "tif", "tiff", "psd", "psb",
-    "hdr",
+    "hdr", "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "raf", "pef", "srw", "x3f", "erf",
+    "mrw", "kdc", "dcr", "iiq", "rwl", "gpr", "3fr",
 ];
+
+/// 相机 RAW 扩展（LibRaw 支持集，与前端 src/raw.ts 保持一致）
+pub const RAW_EXTS: &[&str] = &[
+    "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "raf", "pef", "srw", "x3f", "erf", "mrw",
+    "kdc", "dcr", "iiq", "rwl", "gpr", "3fr",
+];
+
+pub fn is_raw_ext(ext: &str) -> bool {
+    let e = ext.to_ascii_lowercase();
+    RAW_EXTS.contains(&e.as_str())
+}
 
 /// 视频扩展名白名单（小写）：首帧由 Media Foundation 提取，双击交给系统播放器
 pub const VIDEO_EXTS: &[&str] = &["mp4", "m4v", "mov", "webm", "mkv", "avi", "wmv"];

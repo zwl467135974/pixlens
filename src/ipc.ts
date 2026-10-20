@@ -99,6 +99,12 @@ export function imageUrl(e: Entry, maxDim: number, page = 0, exposure = 1): stri
   return `${IMAGE_BASE}?${q}`;
 }
 
+/** 系统关联状态（assoc_status） */
+export interface AssocStatus {
+  registered: boolean;
+  defaultFor: string[];
+}
+
 export const ipc = {
   scanFolder: (path: string) => invoke<ScanResult>("scan_folder", { path }),
   getBenchConfig: () => invoke<BenchConfig | null>("get_bench_config"),
@@ -122,6 +128,10 @@ export const ipc = {
   openPath: (path: string) => invoke<void>("open_path", { path }),
   rememberFolder: (path: string) => invoke<void>("remember_folder", { path }),
   markThumbHintShown: () => invoke<void>("mark_thumb_hint_shown"),
+  assocRegister: () => invoke<number>("assoc_register"),
+  assocUnregister: () => invoke<number>("assoc_unregister"),
+  assocStatus: () => invoke<AssocStatus>("assoc_status"),
+  openDefaultApps: () => invoke<void>("open_default_apps"),
   setWallpaper: (pngB64: string) => invoke<void>("set_wallpaper", { pngB64 }),
   benchMemory: () => invoke<number>("bench_memory"),
 };

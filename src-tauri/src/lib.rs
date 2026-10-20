@@ -1,4 +1,5 @@
 pub mod codecs;
+mod assoc;
 mod edit;
 mod exif;
 mod batch;
@@ -385,6 +386,10 @@ pub fn run() {
             settings::set_settings,
             settings::remember_folder,
             settings::mark_thumb_hint_shown,
+            assoc::assoc_register,
+            assoc::assoc_unregister,
+            assoc::assoc_status,
+            assoc::open_default_apps,
             get_bench_config,
             get_launch_file,
             path_is_dir,

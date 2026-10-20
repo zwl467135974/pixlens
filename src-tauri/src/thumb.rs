@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+#[cfg(test)]
 use walkdir::WalkDir;
 
 use image::codecs::jpeg::JpegEncoder;
@@ -179,6 +180,14 @@ fn get_thumb(state: &ThumbState, src: &str, w: u32) -> std::io::Result<ThumbOutp
         let _ = fs::write(&cache, &bytes);
         state.note_write();
         return Ok(ThumbOutput { bytes, mime });
+    }
+
+    // 相机 RAW：原始字节透传，前端 libraw-wasm 解码（wasm ~1.4MB 懒加载）。
+    // 文件普遍 20~100MB，不做磁盘缓存拷贝；限流读盘防并发风暴。
+    if crate::scan::is_raw_ext(&ext) {
+        let _permit = state.sem.acquire();
+        let bytes = fs::read(&path)?;
+        return Ok(ThumbOutput { bytes, mime: "application/octet-stream" });
     }
 
     let cache = state.cache_dir.join(format!("{key}.jpg"));

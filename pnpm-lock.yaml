@@ -14,6 +14,9 @@ importers:
       '@tauri-apps/plugin-dialog':
         specifier: ^2.0.0
         version: 2.7.3
+      libraw-wasm:
+        specifier: 1.6.0
+        version: 1.6.0
     devDependencies:
       '@tauri-apps/cli':
         specifier: ^2.0.0
@@ -432,6 +435,9 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
+  libraw-wasm@1.6.0:
+    resolution: {integrity: sha512-VfvWq2XGGkc07wexymRLn1H82j6smmC1LAbVl41vnW2Z5RrEPLN+YHi1Hmga2TbxxrY4rOjmTwHwSyTZmypE1g==}
+
   nanoid@3.3.19:
     resolution: {integrity: sha512-Y2tUNy4ouw6tq5oDSKeQYGOyhkUBhNOcGV/02KC+6kd9eDGqdZd++mjMiIDilrBYvjEnCYvVtsuHCuP+okSfug==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
@@ -754,6 +760,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  libraw-wasm@1.6.0: {}
 
   nanoid@3.3.19: {}
 
