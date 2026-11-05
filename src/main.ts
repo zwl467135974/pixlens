@@ -147,10 +147,39 @@ async function openFolder(path?: string): Promise<void> {
   } catch {
     /* 读取失败不阻断浏览 */
   }
+  void ensureMediaDates();
   grid.setTileSize(Number(els.size.value));
   grid.setEntries(state.view);
   els.grid.scrollTop = 0;
   status();
+}
+
+let mediaDatesLoading = false;
+/** "修改时间"排序用 Explorer 同款语义（内容元数据日期优先）——按文件夹惰性补齐 */
+async function ensureMediaDates(): Promise<void> {
+  if (mediaDatesLoading || state.sortKey !== "mtime") return;
+  const todo = state.all.filter((e) => !state.mediaDates.has(e.path)).map((e) => e.path);
+  if (!todo.length) return;
+  mediaDatesLoading = true;
+  try {
+    // 分批拉取，到位即渐进重排（无感微调顺序）
+    for (let i = 0; i < todo.length; i += 400) {
+      const batch = todo.slice(i, i + 400);
+      const items = await ipc.getMediaDates(batch);
+      state.setMediaDates(
+        items.map(({ path, iso }) => ({
+          path,
+          // EXIF 无时区按本地解析；mp4 带 Z 按 UTC
+          ms: Date.parse(iso),
+        })),
+      );
+      if (currentFolder && state.sortKey === "mtime") applyView();
+    }
+  } catch {
+    /* 读取失败维持 mtime 兜底 */
+  } finally {
+    mediaDatesLoading = false;
+  }
 }
 
 function applyView(keepScroll = true): void {
@@ -268,6 +297,7 @@ function wireUi(): void {
     applyView(false);
     // 记住用户为该文件夹选的排序（与 Explorer 记忆按时间取新）
     if (currentFolder) void ipc.rememberFolderSort(currentFolder, state.sortKey, state.sortDir);
+    if (state.sortKey === "mtime") void ensureMediaDates();
   });
   els.sortDir.addEventListener("click", () => {
     const dir: SortDir = state.sortDir === 1 ? -1 : 1;

@@ -3,6 +3,7 @@ mod assoc;
 mod edit;
 mod exif;
 mod folderview;
+mod media_date;
 mod batch;
 mod scan;
 mod settings;
@@ -394,6 +395,7 @@ pub fn run() {
             assoc::open_default_apps,
             folderview::get_folder_sort,
             folderview::get_type_name,
+            media_date::get_media_dates,
             get_bench_config,
             get_launch_file,
             path_is_dir,

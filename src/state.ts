@@ -63,10 +63,20 @@ export class AppState {
   sortKey: SortKey = "name";
   sortDir: SortDir = 1;
   filter = "";
+  /** 内容元数据日期缓存（path → ms；"修改时间"排序用 Explorer 同款语义） */
+  mediaDates = new Map<string, number>();
 
   setAll(entries: Entry[]): void {
     this.all = entries;
     this.recompute();
+  }
+
+  /** 合并一批内容日期并重排（mtime 排序下渐进生效） */
+  setMediaDates(items: { path: string; ms: number }[]): void {
+    for (const { path, ms } of items) {
+      if (Number.isFinite(ms)) this.mediaDates.set(path, ms);
+    }
+    if (this.sortKey === "mtime") this.recompute();
   }
 
   setSort(key: SortKey, dir: SortDir): void {
@@ -104,15 +114,23 @@ export class AppState {
     let list = f ? this.all.filter((e) => e.name.toLowerCase().includes(f)) : this.all.slice();
     const dir = this.sortDir;
     const key = this.sortKey;
-    list.sort((a, b) => dir * compareByKey(key, a, b) || naturalCompare(a.name, b.name) * dir);
+    list.sort((a, b) => dir * compareByKey(key, a, b, this.mediaDates) || naturalCompare(a.name, b.name) * dir);
     this.view = list;
   }
 }
 
-function compareByKey(key: SortKey, a: Entry, b: Entry): number {
+/** Explorer"日期"同款语义：内容元数据日期（EXIF 拍摄日期/媒体录制时间）优先，
+ *  无元数据回退文件修改时间。值由后端 media_date 惰性提供，会话内缓存。 */
+function mediaDate(a: Entry, b: Entry, dates: Map<string, number>): number {
+  const da = dates.get(a.path) ?? a.mtime;
+  const db = dates.get(b.path) ?? b.mtime;
+  return da - db;
+}
+
+function compareByKey(key: SortKey, a: Entry, b: Entry, dates: Map<string, number>): number {
   switch (key) {
     case "mtime":
-      return a.mtime - b.mtime;
+      return mediaDate(a, b, dates);
     case "size":
       return a.size - b.size;
     case "type":
