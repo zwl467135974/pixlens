@@ -2,10 +2,10 @@ param()
 $ErrorActionPreference = 'Stop'
 $token = '3bf2e142eb65e3b249e1bf4154d8c909'
 $repo = 'wyler_admin/pixlens'
-$tag = 'v1.4.0'
-$name = 'PixLens v1.4.0'
+$tag = 'v1.4.1'
+$name = 'PixLens v1.4.1'
 # ASCII-safe body (Gitee API encoding); CRLF to keep markdown line breaks
-$body = "## RAW camera files (19 formats)`r`n`r`n- CR2 / CR3 / NEF / ARW / DNG / ORF / RW2 / RAF / PEF / SRW / X3F / ERF / MRW / KDC / DCR / IIQ / RWL / GPR / 3FR are now viewable without camera vendor software`r`n- Decoded with libraw-wasm in a Web Worker (1.4MB wasm loaded on first RAW file - zero cost at startup)`r`n- Camera white balance + camera color matrix + sRGB 8-bit output; thumbnails use halfSize decoding (~4x faster)`r`n- Rust side only passes raw bytes through with disk-read throttling (~6ms for a 10MB file)`r`n`r`n## Default image viewer (one click)`r`n`r`n- New section in Settings: register/unregister as the system image viewer candidate (33 image formats incl. PSD/RAW)`r`n- Register: HKCU ProgId + Open With list + Windows Default Apps entry; original .ext defaults are backed up and fully restored on unregister`r`n- Set as default opens Windows Settings (ms-settings:defaultapps) for one-click confirmation - same flow as Chrome/Firefox (Windows 10/11 requires user confirmation)`r`n- Uninstall cleans up all association registrations`r`n`r`nNote: after unregistering, Windows picks a new default app automatically (it cannot be programmatically rolled back to the exact previous default - Windows limitation)."
+$body = "## Sorting fully aligned with Windows Explorer`r`n`r`n- Name sort: Chinese file names now sort by pinyin (matching Explorer), Latin/digit names first, natural number order (img_2 < img_10), case-insensitive`r`n- Type sort: uses the same type description strings as Explorer (via SHGetFileInfo)`r`n- Modified-time sort: same semantics as Explorer's Date - content metadata date first (EXIF date taken for photos, container recording time for mp4/mov), falling back to file mtime; lazily loaded with caching, does not slow down folder scanning`r`n- Per-folder sort memory: the sort you pick for a folder is remembered across restarts (up to 100 folders)`r`n- Verified: all three sorts match Explorer tile-by-tile on a real test folder`r`n`r`nNote: an attempt to follow Explorer's per-folder sort settings in real time was explored and retracted - Windows provides no public API to read the current sort without delay (registry shellbags flush lazily; legacy APIs return nothing on Win10)."
 
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $req = [System.Net.HttpWebRequest]::Create("https://gitee.com/api/v5/repos/$repo/releases")
@@ -38,14 +38,14 @@ Write-Output ("CREATED id=" + $id)
 $response = $text
 
 # attach installer
-$exe = 'D:\work\pixlens\target\release\bundle\nsis\PixLens_1.4.0_x64-setup.exe'
+$exe = 'D:\work\pixlens\target\release\bundle\nsis\PixLens_1.4.1_x64-setup.exe'
 $boundary = '----pixlensboundary' + [DateTime]::Now.Ticks
 $uri = "https://gitee.com/api/v5/repos/$repo/releases/$id/attach_files?access_token=$token"
 $req2 = [System.Net.HttpWebRequest]::Create($uri)
 $req2.Method = 'POST'
 $req2.ContentType = "multipart/form-data; boundary=$boundary"
 $fs = [IO.File]::OpenRead($exe)
-$head = ("--$boundary`r`nContent-Disposition: form-data; name=`"file`"; filename=`"PixLens_1.4.0_x64-setup.exe`"`r`nContent-Type: application/octet-stream`r`n`r`n").Replace('\"','"')
+$head = ("--$boundary`r`nContent-Disposition: form-data; name=`"file`"; filename=`"PixLens_1.4.1_x64-setup.exe`"`r`nContent-Type: application/octet-stream`r`n`r`n").Replace('\"','"')
 $headBytes = [Text.Encoding]::UTF8.GetBytes($head)
 $tailBytes = [Text.Encoding]::UTF8.GetBytes("`r`n--$boundary--`r`n")
 $req2.ContentLength = $headBytes.Length + $fs.Length + $tailBytes.Length
