@@ -387,6 +387,7 @@ pub fn run() {
             settings::set_settings,
             settings::remember_folder,
             settings::mark_thumb_hint_shown,
+            settings::remember_folder_sort,
             assoc::assoc_register,
             assoc::assoc_unregister,
             assoc::assoc_status,

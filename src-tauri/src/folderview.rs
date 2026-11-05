@@ -12,14 +12,14 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_TYPENAME, SHGFI_USEFILEATTRIBUTES};
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, HKEY,
-    HKEY_CURRENT_USER, REG_BINARY, REG_VALUE_TYPE, KEY_READ,
+    RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryInfoKeyW, RegQueryValueExW,
+    HKEY, HKEY_CURRENT_USER, REG_BINARY, REG_VALUE_TYPE, KEY_READ,
 };
 
 /// Explorer 排序键 → PixLens SortKey（"name" | "mtime" | "size" | "type"）
@@ -29,6 +29,16 @@ pub struct FolderSortInfo {
     pub key: String,
     /// 1=升序 -1=降序
     pub dir: i32,
+}
+
+/// PixLens 自身记住的文件夹排序（用户在应用内改的；settings 持久化）
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderSortMem {
+    pub key: String,
+    pub dir: i32,
+    /// 保存时刻（Unix ms，与 Explorer bag 最后写入时间比新旧）
+    pub at: u64,
 }
 
 // ── 注册表小工具 ─────────────────────────────
@@ -127,6 +137,11 @@ fn enum_subkeys(key: HKEY) -> Vec<String> {
 
 /// 读 bag（编号）记忆的排序：Shell\{文件夹类型GUID}\Sort 逐个子键试
 fn bag_sort(slot: u32) -> Option<FolderSortInfo> {
+    bag_sort_with_time(slot).map(|(info, _)| info)
+}
+
+/// 同上，附带 bag 的最后写入时间（Unix ms）——与 PixLens 自身记忆比新旧用
+fn bag_sort_with_time(slot: u32) -> Option<(FolderSortInfo, u64)> {
     let bag_shell = format!(r"{BAGS_ROOT}\{slot}\Shell");
     let key = open_key(&bag_shell)?;
     let mut result = None;
@@ -142,7 +157,7 @@ fn bag_sort(slot: u32) -> Option<FolderSortInfo> {
         }
         if let Some(blob) = get_binary(sub_key, "Sort") {
             if let Some(info) = parse_sort_blob(&blob) {
-                result = Some(info);
+                result = Some((info, key_lastwrite_ms(sub_key)));
             }
         }
         unsafe { let _ = RegCloseKey(sub_key); };
@@ -152,6 +167,22 @@ fn bag_sort(slot: u32) -> Option<FolderSortInfo> {
     }
     unsafe { let _ = RegCloseKey(key); };
     result
+}
+
+/// 注册表键最后写入时间 → Unix ms（bag 与 PixLens 记忆比新旧）
+fn key_lastwrite_ms(key: HKEY) -> u64 {
+    let mut ft = windows::Win32::Foundation::FILETIME::default();
+    let r = unsafe {
+        RegQueryInfoKeyW(
+            key, None, None, None, None, None, None, None, None, None, None, Some(&mut ft),
+        )
+    };
+    if r != ERROR_SUCCESS {
+        return 0;
+    }
+    let ticks = (ft.dwHighDateTime as u64) << 32 | ft.dwLowDateTime as u64;
+    // FILETIME：1601-01-01 起 100ns 单位 → Unix ms
+    ticks.saturating_sub(116_444_736_000_000_000) / 10_000
 }
 
 // ── Sort blob 解析 ─────────────────────────────
@@ -393,15 +424,40 @@ fn walk_tree(node: &str, depth: u32, visit: &mut dyn FnMut(&str, u32)) {
 
 /// 读 Explorer 对该文件夹记忆的排序；无记忆/不认识键 → None
 pub fn folder_sort(path: &str) -> Option<FolderSortInfo> {
+    explorer_sort_with_time(path).map(|(info, _)| info)
+}
+
+/// Explorer 记忆 + bag 最后写入时间
+pub fn explorer_sort_with_time(path: &str) -> Option<(FolderSortInfo, u64)> {
     for node in bag_nodes_for(path) {
         let Some(slot) = node_slot(&node) else {
             continue;
         };
-        if let Some(info) = bag_sort(slot) {
-            return Some(info);
+        if let Some(hit) = bag_sort_with_time(slot) {
+            return Some(hit);
         }
     }
     None
+}
+
+/// 生效排序 = PixLens 自身记忆 vs Explorer 记忆，谁更新用谁（都不在 → None 用全局默认）
+pub fn effective_folder_sort(
+    path: &str,
+    own: Option<&FolderSortMem>,
+) -> Option<FolderSortInfo> {
+    let explorer = explorer_sort_with_time(path);
+    match (own, explorer) {
+        (Some(own), Some((bag, bag_at))) => {
+            if own.at >= bag_at {
+                Some(FolderSortInfo { key: own.key.clone(), dir: own.dir })
+            } else {
+                Some(bag)
+            }
+        }
+        (Some(own), None) => Some(FolderSortInfo { key: own.key.clone(), dir: own.dir }),
+        (None, Some((bag, _))) => Some(bag),
+        (None, None) => None,
+    }
 }
 
 // ── 类型描述串（Explorer"类型"列同款）─────────────────
@@ -467,9 +523,11 @@ pub fn debug_folder_sort(path: &str) -> String {
 
 // ── Tauri 命令 ─────────────────────────────
 
+/// 生效排序 = max(PixLens 自身记忆, Explorer bag) 按时间
 #[tauri::command]
-pub fn get_folder_sort(path: String) -> Option<FolderSortInfo> {
-    folder_sort(&path)
+pub fn get_folder_sort(app: tauri::AppHandle, path: String) -> Option<FolderSortInfo> {
+    let own = crate::settings::load(&app).folder_sorts.get(&path).cloned();
+    effective_folder_sort(&path, own.as_ref())
 }
 
 #[tauri::command]

@@ -22,6 +22,8 @@ pub struct Settings {
     pub last_folder: Option<String>,
     /// Explorer 缓存提示横幅已展示过（每台机器一次；旧文件装完不重试是缓存特性）
     pub thumb_hint_shown: bool,
+    /// 用户在 PixLens 内为文件夹选的排序（freshest-wins 与 Explorer 记忆合并）
+    pub folder_sorts: std::collections::HashMap<String, crate::folderview::FolderSortMem>,
 }
 
 impl Default for Settings {
@@ -33,6 +35,7 @@ impl Default for Settings {
             window: None,
             last_folder: None,
             thumb_hint_shown: false,
+            folder_sorts: std::collections::HashMap::new(),
         }
     }
 }
@@ -94,6 +97,35 @@ pub fn mark_thumb_hint_shown(app: tauri::AppHandle) {
         s.thumb_hint_shown = true;
         let _ = save(&app, &s);
     }
+}
+
+/// 记住用户在 PixLens 内为某文件夹选的排序（与 Explorer 记忆 freshest-wins 合并，上限 100 个）
+#[tauri::command]
+pub fn remember_folder_sort(app: tauri::AppHandle, path: String, key: String, dir: i32) {
+    if !["name", "mtime", "size", "type"].contains(&key.as_str()) || (dir != 1 && dir != -1) {
+        return;
+    }
+    let mut s = load(&app);
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    s.folder_sorts.insert(
+        path,
+        crate::folderview::FolderSortMem { key, dir, at },
+    );
+    // 超上限淘汰最旧的
+    if s.folder_sorts.len() > 100 {
+        let oldest = s
+            .folder_sorts
+            .iter()
+            .min_by_key(|(_, m)| m.at)
+            .map(|(p, _)| p.clone());
+        if let Some(p) = oldest {
+            s.folder_sorts.remove(&p);
+        }
+    }
+    let _ = save(&app, &s);
 }
 
 /// 应用设置并即时生效（缓存上限原子更新 + 触发 LRU 淘汰），返回当前缓存占用 MB。

@@ -266,6 +266,8 @@ function wireUi(): void {
   els.sortKey.addEventListener("change", () => {
     state.setSort(els.sortKey.value as SortKey, state.sortDir);
     applyView(false);
+    // 记住用户为该文件夹选的排序（与 Explorer 记忆按时间取新）
+    if (currentFolder) void ipc.rememberFolderSort(currentFolder, state.sortKey, state.sortDir);
   });
   els.sortDir.addEventListener("click", () => {
     const dir: SortDir = state.sortDir === 1 ? -1 : 1;
@@ -273,6 +275,7 @@ function wireUi(): void {
     els.sortDir.textContent = dir === 1 ? "↓" : "↑";
     state.setSort(state.sortKey, dir);
     applyView(false);
+    if (currentFolder) void ipc.rememberFolderSort(currentFolder, state.sortKey, dir);
   });
 
   let searchTimer = 0;

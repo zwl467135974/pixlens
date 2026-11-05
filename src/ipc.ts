@@ -142,6 +142,8 @@ export const ipc = {
   assocStatus: () => invoke<AssocStatus>("assoc_status"),
   openDefaultApps: () => invoke<void>("open_default_apps"),
   getFolderSort: (path: string) => invoke<FolderSortInfo | null>("get_folder_sort", { path }),
+  rememberFolderSort: (path: string, key: string, dir: number) =>
+    invoke<void>("remember_folder_sort", { path, key, dir }),
   setWallpaper: (pngB64: string) => invoke<void>("set_wallpaper", { pngB64 }),
   benchMemory: () => invoke<number>("bench_memory"),
 };
