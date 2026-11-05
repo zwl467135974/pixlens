@@ -4,7 +4,35 @@ import type { Entry, FsChanged } from "./ipc";
 export type SortKey = "name" | "mtime" | "size" | "type";
 export type SortDir = 1 | -1;
 
-/** 自然排序：数字段按数值比较（img_2 < img_10） */
+/** 自然排序：数字段按数值比较（img_2 < img_10）；
+ * 文字分层对齐资源管理器——非 CJK 在前，汉字按拼音（极乐楼 < 蚂蚁消除 < 我超勇往 < 消除星星）。
+ * 注意 ICU 的 zh-CN collator 会把汉字排在拉丁之前（与 Explorer 相反），不能整串直用；
+ * 只在 CJK 对 CJK 的字符比较时用它的拼音序。 */
+const CJK_RE = /[\u2E80-\u9FFF\uF900-\uFAFF\uFE30-\uFE4F\u{20000}-\u{3FFFF}]/u;
+const collCJK = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" });
+
+function isCJK(ch: string): boolean {
+  return CJK_RE.test(ch);
+}
+
+/** 文本块比较：逐字符——CJK 恒大于非 CJK；同为 CJK 用拼音 collator；否则码点（已 lowercase） */
+function cmpText(x: string, y: string): number {
+  const xa = Array.from(x);
+  const ya = Array.from(y);
+  const n = Math.min(xa.length, ya.length);
+  for (let i = 0; i < n; i++) {
+    const cx = xa[i];
+    const cy = ya[i];
+    if (cx === cy) continue;
+    const kx = isCJK(cx) ? 1 : 0;
+    const ky = isCJK(cy) ? 1 : 0;
+    if (kx !== ky) return kx - ky;
+    if (kx === 1) return collCJK.compare(cx, cy) || xa.length - ya.length;
+    return cx < cy ? -1 : 1;
+  }
+  return xa.length - ya.length;
+}
+
 export function naturalCompare(a: string, b: string): number {
   const chunk = (s: string): (number | string)[] => {
     const out: (number | string)[] = [];
@@ -23,7 +51,7 @@ export function naturalCompare(a: string, b: string): number {
     const y = bx[i];
     if (x === y) continue;
     if (typeof x === "number" && typeof y === "number") return x < y ? -1 : 1;
-    if (typeof x === typeof y) return String(x) < String(y) ? -1 : 1;
+    if (typeof x === typeof y) return cmpText(String(x), String(y));
     return typeof x === "number" ? -1 : 1;
   }
   return ax.length - bx.length;
