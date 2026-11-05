@@ -136,6 +136,17 @@ async function openFolder(path?: string): Promise<void> {
   const res = await ipc.scanFolder(dir);
   lastScanMs = res.elapsedMs;
   state.setAll(res.entries);
+  // 跟随 Explorer 对该文件夹的记忆排序（有记忆才用，否则保持当前默认）
+  try {
+    const mem = await ipc.getFolderSort(dir);
+    if (mem && (mem.key !== state.sortKey || mem.dir !== state.sortDir)) {
+      state.setSort(mem.key, mem.dir);
+      els.sortKey.value = mem.key;
+      els.sortDir.textContent = mem.dir === 1 ? "↓" : "↑";
+    }
+  } catch {
+    /* 读取失败不阻断浏览 */
+  }
   grid.setTileSize(Number(els.size.value));
   grid.setEntries(state.view);
   els.grid.scrollTop = 0;

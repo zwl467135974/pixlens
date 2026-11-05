@@ -5,10 +5,19 @@ export interface Entry {
   name: string;
   path: string;
   ext: string;
+  /** Explorer"类型"列同款描述串（类型排序对齐用） */
+  typeName: string;
   size: number;
   mtime: number;
   /** "image" 走图片管线；"video" 走 MF 首帧缩略图 + 系统播放器 */
   kind: "image" | "video";
+}
+
+/** Explorer 对文件夹记忆的排序（folderview）；键与 state.ts 的 SortKey/SortDir 一致 */
+export interface FolderSortInfo {
+  key: "name" | "mtime" | "size" | "type";
+  /** 1=升序 -1=降序 */
+  dir: 1 | -1;
 }
 
 export interface ScanResult {
@@ -132,6 +141,7 @@ export const ipc = {
   assocUnregister: () => invoke<number>("assoc_unregister"),
   assocStatus: () => invoke<AssocStatus>("assoc_status"),
   openDefaultApps: () => invoke<void>("open_default_apps"),
+  getFolderSort: (path: string) => invoke<FolderSortInfo | null>("get_folder_sort", { path }),
   setWallpaper: (pngB64: string) => invoke<void>("set_wallpaper", { pngB64 }),
   benchMemory: () => invoke<number>("bench_memory"),
 };

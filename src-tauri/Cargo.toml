@@ -46,9 +46,11 @@ base64 = "0.22"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Media_MediaFoundation",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_Security",
     "Win32_System_Registry",
+    "Win32_UI_Shell",
     "Win32_System_Variant",
 ] }

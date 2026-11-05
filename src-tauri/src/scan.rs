@@ -49,6 +49,8 @@ pub struct Entry {
     pub name: String,
     pub path: String,
     pub ext: String,
+    /// Explorer"类型"列同款描述串（"PNG 文件"等，类型排序与 Explorer 对齐）
+    pub type_name: String,
     pub size: u64,
     /// 毫秒级 Unix 时间戳（与缩略图缓存键联动）
     pub mtime: u64,
@@ -90,6 +92,7 @@ pub fn entry_from_path(p: &Path) -> Option<Entry> {
         name: p.file_name()?.to_string_lossy().into_owned(),
         path: p.to_string_lossy().into_owned(),
         ext: ext.to_ascii_lowercase(),
+        type_name: crate::folderview::type_name_for_ext(&ext),
         size: md.len(),
         mtime,
         kind,

@@ -116,7 +116,8 @@ function compareByKey(key: SortKey, a: Entry, b: Entry): number {
     case "size":
       return a.size - b.size;
     case "type":
-      return a.ext < b.ext ? -1 : a.ext > b.ext ? 1 : naturalCompare(a.name, b.name);
+      // Explorer"类型"列是描述串（"JPEG 文件"等）而非扩展名——用同款字符串排序对齐
+      return cmpText(a.typeName || a.ext, b.typeName || b.ext);
     case "name":
     default:
       return naturalCompare(a.name, b.name);

@@ -2,6 +2,7 @@ pub mod codecs;
 mod assoc;
 mod edit;
 mod exif;
+mod folderview;
 mod batch;
 mod scan;
 mod settings;
@@ -390,6 +391,8 @@ pub fn run() {
             assoc::assoc_unregister,
             assoc::assoc_status,
             assoc::open_default_apps,
+            folderview::get_folder_sort,
+            folderview::get_type_name,
             get_bench_config,
             get_launch_file,
             path_is_dir,
