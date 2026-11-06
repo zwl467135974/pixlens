@@ -42,11 +42,15 @@ export interface AppSettings {
   cacheLimitMb: number;
   defaultSort: string;
   theme: string;
+  /** 缩略图尺寸 px（96..512）；只读——写入走 remember_tile_size 单一通道 */
+  tileSize?: number;
   /** Rust 侧维护（窗口几何/上次文件夹），前端只读 */
   window?: unknown;
   lastFolder?: string | null;
   /** Explorer 缓存提示横幅是否已展示（每台机器一次） */
   thumbHintShown?: boolean;
+  /** 上次工作集（合并浏览的文件夹列表，启动按序恢复） */
+  lastFolders?: string[];
 }
 
 export interface RenamePair {
@@ -152,6 +156,9 @@ export const ipc = {
   rememberFolderSort: (path: string, key: string, dir: number) =>
     invoke<void>("remember_folder_sort", { path, key, dir }),
   getMediaDates: (paths: string[]) => invoke<MediaDate[]>("get_media_dates", { paths }),
+  rememberTileSize: (size: number) => invoke<void>("remember_tile_size", { size }),
+  setWatchFolders: (paths: string[]) => invoke<void>("set_watch_folders", { paths }),
+  rememberWorkset: (paths: string[]) => invoke<void>("remember_workset", { paths }),
   setWallpaper: (pngB64: string) => invoke<void>("set_wallpaper", { pngB64 }),
   benchMemory: () => invoke<number>("bench_memory"),
 };

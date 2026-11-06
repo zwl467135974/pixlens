@@ -10,17 +10,19 @@
     <div id="app">
       <header id="toolbar">
         <button id="btn-open" class="btn primary" title="Ctrl+O">打开文件夹</button>
+        <button id="btn-add" class="btn" title="添加文件夹合并浏览（Ctrl+Shift+O）——跨文件夹对比、翻页、搜索直接可用">添加文件夹</button>
         <span class="sep"></span>
         <button id="btn-batch" class="btn" disabled title="选中后可用（点击选择，Ctrl/Shift 多选，Ctrl+A 全选）">批量处理</button>
         <button id="btn-compare" class="btn" disabled title="选中两张后对比查看（C）">对比</button>
         <span class="sep"></span>
         <label class="ctl">排序
           <select id="sort-key">
-            <option value="name">名称</option>
-            <option value="mtime">修改时间</option>
-            <option value="size">大小</option>
-            <option value="type">类型</option>
-          </select>
+          <option value="name">名称</option>
+          <option value="mtime">修改时间</option>
+          <option value="size">大小</option>
+          <option value="type">类型</option>
+          <option value="folder">文件夹</option>
+        </select>
         </label>
         <button id="sort-dir" class="btn icon" title="升序 / 降序">↓</button>
         <span class="sep"></span>
@@ -28,9 +30,10 @@
         <span class="grow"></span>
         <button id="btn-settings" class="btn icon" title="设置">⚙</button>
         <label class="ctl"><span id="size-label">160px</span>
-          <input id="size" type="range" min="96" max="512" step="8" value="160" />
+          <input id="size" type="range" min="96" max="512" step="8" value="160" title="缩略图大小（网格内 Ctrl+滚轮 / Ctrl+=/- 快捷缩放，Ctrl+0 复位）"/>
         </label>
       </header>
+      <div id="folder-chips" class="hidden"></div>
       <main id="grid-wrap">
         <div id="empty">
           <div class="empty-ring"></div>

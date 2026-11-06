@@ -97,6 +97,8 @@ const els = {
   size: $("size") as HTMLInputElement,
   sizeLabel: $("size-label"),
   btnSettings: $("btn-settings"),
+  btnAdd: $("btn-add"),
+  chips: $("folder-chips"),
   statusLeft: $("status-left"),
   statusRight: $("status-right"),
 };
@@ -111,9 +113,46 @@ function applySettings(s: AppSettings): void {
     els.sortKey.value = key;
     if (currentFolder) applyView(false);
   }
+  // 浏览密度个人习惯（滑块/Ctrl+滚轮改的）
+  if (s.tileSize && s.tileSize !== Number(els.size.value)) {
+    els.size.value = String(s.tileSize);
+    els.sizeLabel.textContent = `${s.tileSize}px`;
+    grid.setTileSize(s.tileSize);
+  }
 }
 
-let currentFolder = "";
+// ── 缩略图缩放（Ctrl+滚轮 / Ctrl+=-0 / 滑块，三者同一路径）──
+/** 应用新尺寸；anchorY 为光标距网格视口顶的像素（滚轮锚定：光标下内容不跳） */
+function applyTileSize(next: number, anchorY?: number): void {
+  const prev = Number(els.size.value);
+  els.size.value = String(next);
+  els.sizeLabel.textContent = `${next}px`;
+  if (anchorY !== undefined && prev !== next) {
+    // 光标处内容偏移按尺寸比例换算，重排后恢复视口位置
+    const offset = els.grid.scrollTop + anchorY;
+    grid.setTileSize(next);
+    els.grid.scrollTop = Math.max(0, (offset * next) / prev - anchorY);
+  } else {
+    grid.setTileSize(next);
+  }
+  status();
+  void ipc.rememberTileSize(next);
+}
+
+let zoomTimer = 0;
+/** Ctrl+滚轮：与滑块同粒度（8px/格）同边界；去抖 ~120ms 防连发缩略图请求风暴 */
+function zoomStep(delta: number, anchorY?: number): void {
+  const cur = Number(els.size.value);
+  const next = Math.min(512, Math.max(96, cur + delta));
+  if (next === cur) return;
+  els.size.value = String(next);
+  els.sizeLabel.textContent = `${next}px`;
+  clearTimeout(zoomTimer);
+  zoomTimer = window.setTimeout(() => applyTileSize(next, anchorY), 120);
+}
+
+let folders: string[] = []; // 工作集（合并浏览的文件夹列表）
+let currentFolder = ""; // folders[0]（兼容既有引用）
 let lastScanMs = 0;
 const thumbLoadCbs = new Set<(e: Entry) => void>();
 grid.onThumbLoaded = (e) => thumbLoadCbs.forEach((cb) => cb(e));
@@ -129,16 +168,68 @@ async function openFolder(path?: string): Promise<void> {
     dir = await openFileDialog({ directory: true, multiple: false });
   }
   if (typeof dir !== "string") return;
+  folders = [dir];
   currentFolder = dir;
-  void ipc.rememberFolder(dir); // 上次文件夹记忆（变化才写盘）
+  await scanInto(dir, false);
+  afterWorksetChange(true);
+}
+
+/** 添加文件夹（合并浏览）：追加进当前网格，跨文件夹对比/翻页直接可用 */
+async function addFolder(path?: string): Promise<void> {
+  let dir: string | null | string[] = path ?? null;
+  if (!dir) {
+    dir = await openFileDialog({ directory: true, multiple: false });
+  }
+  if (typeof dir !== "string") return;
+  const norm = dir.replace(/[\\/]+$/, "");
+  if (folders.some((f) => f.toLowerCase() === norm.toLowerCase())) {
+    status("该文件夹已在列表中");
+    return;
+  }
+  const first = !folders.length;
+  await scanInto(norm, !first);
+  folders.push(norm);
+  if (!currentFolder) currentFolder = norm;
+  afterWorksetChange(first);
+}
+
+function removeFolder(dir: string): void {
+  folders = folders.filter((f) => f !== dir);
+  if (currentFolder === dir) currentFolder = folders[0] ?? "";
+  const gone = state.all.filter((e) => underDir(e.path, dir)).map((e) => e.path);
+  state.patch({ created: [], removed: gone, updated: [] });
+  for (const p of gone) selected.delete(p);
+  refreshSelection();
+  if (!folders.length) {
+    els.empty.classList.remove("hidden");
+    els.grid.classList.add("hidden");
+  }
+  afterWorksetChange(false);
+}
+
+/** 工作集排序记忆键（多文件夹用并集键） */
+function worksetKey(): string {
+  return folders.length > 1 ? folders.join("|") : folders[0] ?? "";
+}
+
+/** path 是否位于 dir 之下（含大小写容差，Windows 不区分大小写） */
+function underDir(p: string, dir: string): boolean {
+  const norm = p.toLowerCase().replace(/[^\\/]+$/, "");
+  return norm === dir.toLowerCase().replace(/[\\/]+$/, "") + "\\" || norm.startsWith(dir.toLowerCase().replace(/[\\/]+$/, "") + "\\");
+}
+
+/** 扫描一个目录并入网格：replace=替换全部，append=追加（多文件夹合并浏览） */
+async function scanInto(dir: string, append: boolean): Promise<void> {
+  currentFolder = currentFolder || dir;
   showGrid();
-  status("扫描中…");
+  status(append ? "添加文件夹…" : "扫描中…");
   const res = await ipc.scanFolder(dir);
   lastScanMs = res.elapsedMs;
-  state.setAll(res.entries);
-  // 跟随 Explorer 对该文件夹的记忆排序（有记忆才用，否则保持当前默认）
+  if (append) state.patch({ created: res.entries, removed: [], updated: [] });
+  else state.setAll(res.entries);
+  // 工作集排序记忆（有记忆才用，否则保持当前默认）
   try {
-    const mem = await ipc.getFolderSort(dir);
+    const mem = await ipc.getFolderSort(worksetKey());
     if (mem && (mem.key !== state.sortKey || mem.dir !== state.sortDir)) {
       state.setSort(mem.key, mem.dir);
       els.sortKey.value = mem.key;
@@ -148,10 +239,43 @@ async function openFolder(path?: string): Promise<void> {
     /* 读取失败不阻断浏览 */
   }
   void ensureMediaDates();
+}
+
+/** 工作集变化后的公共收尾：watch 同步 / 持久化 / chips / 网格刷新 */
+function afterWorksetChange(resetScroll: boolean): void {
+  void ipc.setWatchFolders(folders);
+  void ipc.rememberWorkset(folders);
+  renderChips();
   grid.setTileSize(Number(els.size.value));
   grid.setEntries(state.view);
-  els.grid.scrollTop = 0;
+  if (resetScroll) els.grid.scrollTop = 0;
   status();
+}
+
+/** 文件夹来源 chips（合并浏览时的来源管理与移除入口） */
+function renderChips(): void {
+  const bar = els.chips;
+  bar.innerHTML = "";
+  if (!folders.length) {
+    bar.classList.add("hidden");
+    return;
+  }
+  bar.classList.remove("hidden");
+  for (const dir of folders) {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    const name = dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? dir;
+    const label = document.createElement("span");
+    label.className = "chip-name";
+    label.textContent = name;
+    label.title = dir;
+    const btn = document.createElement("button");
+    btn.textContent = "✕";
+    btn.title = "移除该文件夹";
+    btn.addEventListener("click", () => removeFolder(dir));
+    chip.append(label, btn);
+    bar.appendChild(chip);
+  }
 }
 
 let mediaDatesLoading = false;
@@ -220,11 +344,13 @@ function status(extra = ""): void {
   const folder = currentFolder || "";
   const shown = state.view.length;
   const total = state.all.length;
-  els.statusLeft.textContent = extra
-    ? extra
-    : folder
-      ? `${shown === total ? total : `${shown} / ${total}`} 个文件 · ${folder}`
-      : "";
+  // 多文件夹工作集：显示数量 + 文件夹数
+  const loc = folder
+    ? folders.length > 1
+      ? `${total} 个文件 · ${folders.length} 个文件夹`
+      : `${shown === total ? total : `${shown} / ${total}`} 个文件 · ${folder}`
+    : "";
+  els.statusLeft.textContent = extra ? extra : loc;
   const parts: string[] = [];
   if (selected.size) parts.push(`已选 ${selected.size} 张`);
   if (lastScanMs) parts.push(`扫描 ${lastScanMs.toFixed(0)}ms`);
@@ -252,10 +378,25 @@ function wireUi(): void {
   els.btnBatch.addEventListener("click", () => batchPanel.open());
   els.btnCompare.addEventListener("click", openCompare);
   els.btnSettings.addEventListener("click", () => void settingsPanel.open());
+  els.btnAdd.addEventListener("click", () => void addFolder());
   document.addEventListener("keydown", (ev) => {
     if (ev.ctrlKey && ev.key.toLowerCase() === "o") {
       ev.preventDefault();
       void openFolder();
+    }
+    // Ctrl+=/-/0：网格缩略图缩放（查看器有自己的缩放体系，网格态才响应）
+    if (
+      ev.ctrlKey && (ev.key === "=" || ev.key === "+" || ev.key === "-" || ev.key === "0") &&
+      currentFolder && !viewer.isOpen
+    ) {
+      ev.preventDefault();
+      if (ev.key === "0") applyTileSize(160);
+      else zoomStep(ev.key === "-" ? -16 : 16);
+    }
+    // Ctrl+Shift+O：添加文件夹（合并浏览）
+    if (ev.ctrlKey && ev.shiftKey && ev.key.toLowerCase() === "o") {
+      ev.preventDefault();
+      void addFolder();
     }
     // Ctrl+A 全选（查看器关闭、批量面板关闭时）
     if (ev.ctrlKey && ev.key.toLowerCase() === "a" && currentFolder && !viewer.isOpen) {
@@ -296,7 +437,7 @@ function wireUi(): void {
     state.setSort(els.sortKey.value as SortKey, state.sortDir);
     applyView(false);
     // 记住用户为该文件夹选的排序（与 Explorer 记忆按时间取新）
-    if (currentFolder) void ipc.rememberFolderSort(currentFolder, state.sortKey, state.sortDir);
+    if (worksetKey()) void ipc.rememberFolderSort(worksetKey(), state.sortKey, state.sortDir);
     if (state.sortKey === "mtime") void ensureMediaDates();
   });
   els.sortDir.addEventListener("click", () => {
@@ -305,7 +446,7 @@ function wireUi(): void {
     els.sortDir.textContent = dir === 1 ? "↓" : "↑";
     state.setSort(state.sortKey, dir);
     applyView(false);
-    if (currentFolder) void ipc.rememberFolderSort(currentFolder, state.sortKey, dir);
+    if (worksetKey()) void ipc.rememberFolderSort(worksetKey(), state.sortKey, dir);
   });
 
   let searchTimer = 0;
@@ -323,7 +464,19 @@ function wireUi(): void {
   els.size.addEventListener("change", () => {
     grid.setTileSize(Number(els.size.value));
     status();
+    void ipc.rememberTileSize(Number(els.size.value));
   });
+  // Ctrl+滚轮缩放（触控板捏合原生映射为 ctrlKey wheel；锚定光标下内容）
+  els.grid.addEventListener(
+    "wheel",
+    (ev) => {
+      if (!ev.ctrlKey || !currentFolder) return;
+      ev.preventDefault();
+      const anchorY = ev.clientY - els.grid.getBoundingClientRect().top;
+      zoomStep(ev.deltaY < 0 ? 8 : -8, anchorY);
+    },
+    { passive: false },
+  );
 
   // OS 级拖放（wry 拦截，HTML5 drop 不会触发）：enter/over 高亮，drop 打开
   let dragHintOn = false;
@@ -401,15 +554,26 @@ async function boot(): Promise<void> {
     viewer.open(launch);
     return;
   }
-  // 恢复上次浏览的文件夹（存在且仍是目录才恢复）
-  const last = bootSettings?.lastFolder;
-  if (last && typeof last === "string" && last.length > 2) {
+  // 恢复上次工作集（多文件夹合并浏览；旧版本单文件夹字段向后兼容）
+  const ws: string[] = (
+    bootSettings?.lastFolders?.length
+      ? bootSettings.lastFolders
+      : bootSettings?.lastFolder
+        ? [bootSettings.lastFolder]
+        : []
+  ).filter((p) => typeof p === "string" && p.length > 2);
+  for (const dir of ws) {
     try {
-      if (await ipc.pathIsDir(last)) await openFolder(last);
+      if (!(await ipc.pathIsDir(dir))) continue;
+      const first = !folders.length;
+      await scanInto(dir, !first);
+      folders.push(dir);
+      if (!currentFolder) currentFolder = dir;
     } catch {
-      /* 忽略：保持欢迎页 */
+      /* 单个失效跳过 */
     }
   }
+  if (folders.length) afterWorksetChange(true);
 }
 
 void boot();

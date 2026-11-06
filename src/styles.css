@@ -709,6 +709,45 @@ body {
   cursor: default;
 }
 
+/* ── 工作集文件夹 chips（合并浏览）────── */
+#folder-chips {
+  display: flex;
+  gap: 6px;
+  padding: 5px 12px 0;
+  flex-wrap: wrap;
+}
+
+#folder-chips.hidden {
+  display: none;
+}
+
+#folder-chips .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 2px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--fg);
+}
+
+#folder-chips .chip button {
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+#folder-chips .chip button:hover {
+  opacity: 1;
+}
+
 /* ── 滚动条 ─────────────────────────── */
 #grid::-webkit-scrollbar {
   width: 12px;

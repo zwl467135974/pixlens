@@ -123,6 +123,7 @@ export class SettingsPanel {
       cacheLimitMb: Number((this.root.querySelector("#sp-cache") as HTMLSelectElement).value),
       defaultSort: (this.root.querySelector("#sp-sort") as HTMLSelectElement).value,
       theme: (this.root.querySelector("#sp-theme") as HTMLSelectElement).value,
+      // tileSize 不经此保存：单一写入口是 remember_tile_size
     };
     try {
       const sizeMb = await ipc.setSettings(s);

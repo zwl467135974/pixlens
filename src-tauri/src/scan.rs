@@ -100,7 +100,7 @@ pub fn entry_from_path(p: &Path) -> Option<Entry> {
 }
 
 #[tauri::command]
-pub fn scan_folder(app: tauri::AppHandle, path: String) -> Result<ScanResult, String> {
+pub fn scan_folder(path: String) -> Result<ScanResult, String> {
     let t0 = Instant::now();
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
@@ -123,8 +123,6 @@ pub fn scan_folder(app: tauri::AppHandle, path: String) -> Result<ScanResult, St
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
     println!("[perf] scan_folder: {} files in {:.1} ms ({})", entries.len(), ms, path);
 
-    start_watch(app, dir);
-
     Ok(ScanResult { entries, elapsed_ms: ms })
 }
 
@@ -137,20 +135,58 @@ pub struct FsChanged {
     pub updated: Vec<Entry>,
 }
 
-/// 同时只监听一个文件夹：换文件夹时丢弃旧 watcher
-fn start_watch(app: tauri::AppHandle, dir: PathBuf) {
+/// 工作集监听（多文件夹）：前端按工作集变化调用，diff 增删 watch 路径。
+/// 单实例 watcher 监听多条路径；全空时释放（事件线程随 channel 断开自然退出）。
+#[tauri::command]
+pub fn set_watch_folders(app: tauri::AppHandle, paths: Vec<String>) {
+    let app2 = app.clone(); // debounce_loop 线程用（app 被 state 借用）
     let state = app.state::<crate::AppState>();
-    let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
-    match notify::recommended_watcher(tx) {
-        Ok(mut w) => {
-            if let Err(e) = w.watch(&dir, RecursiveMode::Recursive) {
-                println!("[watch] watch 失败: {e}");
-            }
-            *state.watcher.lock() = Some(w);
-            std::thread::spawn(move || debounce_loop(app, rx));
-        }
-        Err(e) => println!("[watch] 初始化失败: {e}"),
+    let mut watched = state.watched.lock().clone();
+    let want: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+
+    let to_add: Vec<&PathBuf> = want.iter().filter(|p| !watched.contains(p)).collect();
+    let to_remove: Vec<PathBuf> = watched.iter().filter(|p| !want.contains(p)).cloned().collect();
+
+    if to_add.is_empty() && to_remove.is_empty() {
+        return;
     }
+
+    let mut guard = state.watcher.lock();
+    if to_add.is_empty() && want.is_empty() {
+        // 全部移除：释放 watcher（事件线程随 channel 断开退出）
+        *guard = None;
+        state.watched.lock().clear();
+        return;
+    }
+    let mut w = match guard.take() {
+        Some(w) => w,
+        None => {
+            let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
+            match notify::recommended_watcher(tx) {
+                Ok(w) => {
+                    std::thread::spawn(move || debounce_loop(app2, rx));
+                    w
+                }
+                Err(e) => {
+                    println!("[watch] 初始化失败: {e}");
+                    return;
+                }
+            }
+        }
+    };
+    for dir in &to_add {
+        if let Err(e) = w.watch(dir, RecursiveMode::Recursive) {
+            println!("[watch] watch 失败: {e}");
+        } else {
+            watched.push((*dir).clone());
+        }
+    }
+    for dir in &to_remove {
+        let _ = w.unwatch(dir);
+        watched.retain(|p| p != dir);
+    }
+    *guard = Some(w);
+    *state.watched.lock() = watched;
 }
 
 fn debounce_loop(app: tauri::AppHandle, rx: std::sync::mpsc::Receiver<notify::Result<notify::Event>>) {

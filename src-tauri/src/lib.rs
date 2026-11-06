@@ -19,6 +19,8 @@ use tauri::Manager;
 pub struct AppState {
     pub thumb: thumb::ThumbState,
     pub watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// 工作集中正在监听的文件夹（set_watch_folders diff 用）
+    pub watched: Mutex<Vec<std::path::PathBuf>>,
     pub bench: Option<BenchConfig>,
     /// 双击关联文件启动时待打开的文件路径
     pub launch_file: Option<String>,
@@ -287,6 +289,7 @@ pub fn run() {
                     t
                 },
                 watcher: Mutex::new(None),
+                watched: Mutex::new(Vec::new()),
                 bench,
                 launch_file,
                 geom: Mutex::new(s.window),
@@ -378,6 +381,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             scan::scan_folder,
+            scan::set_watch_folders,
             batch::batch_rename_preview,
             batch::batch_rename_apply,
             batch::batch_convert,
@@ -387,8 +391,10 @@ pub fn run() {
             settings::get_settings,
             settings::set_settings,
             settings::remember_folder,
+            settings::remember_workset,
             settings::mark_thumb_hint_shown,
             settings::remember_folder_sort,
+            settings::remember_tile_size,
             assoc::assoc_register,
             assoc::assoc_unregister,
             assoc::assoc_status,

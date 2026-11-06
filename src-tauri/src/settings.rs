@@ -18,10 +18,14 @@ pub struct Settings {
     pub theme: String,
     /// 窗口几何（Rust 侧维护，set_settings 合并保留）
     pub window: Option<crate::window_state::WindowGeom>,
-    /// 上次浏览的文件夹（启动恢复）
+    /// 上次浏览的文件夹（启动恢复；旧字段，新字段 last_folders 优先）
     pub last_folder: Option<String>,
+    /// 上次的工作集（多文件夹合并浏览；启动按序恢复）
+    pub last_folders: Vec<String>,
     /// Explorer 缓存提示横幅已展示过（每台机器一次；旧文件装完不重试是缓存特性）
     pub thumb_hint_shown: bool,
+    /// 缩略图尺寸（px，96..=512；网格浏览密度个人习惯）
+    pub tile_size: u32,
     /// 用户在 PixLens 内为文件夹选的排序（freshest-wins 与 Explorer 记忆合并）
     pub folder_sorts: std::collections::HashMap<String, crate::folderview::FolderSortMem>,
 }
@@ -34,7 +38,9 @@ impl Default for Settings {
             theme: "dark".into(),
             window: None,
             last_folder: None,
+            last_folders: Vec::new(),
             thumb_hint_shown: false,
+            tile_size: 160,
             folder_sorts: std::collections::HashMap::new(),
         }
     }
@@ -65,13 +71,29 @@ fn validate(s: &Settings) -> Result<(), String> {
     if !(256..=8192).contains(&s.cache_limit_mb) {
         return Err("缓存上限需在 256~8192 MB 之间".into());
     }
-    if !["name", "mtime", "size", "type"].contains(&s.default_sort.as_str()) {
+    if !["name", "mtime", "size", "type", "folder"].contains(&s.default_sort.as_str()) {
         return Err("排序键非法".into());
     }
     if !["dark", "light"].contains(&s.theme.as_str()) {
         return Err("主题非法".into());
     }
+    if !(96..=512).contains(&s.tile_size) {
+        return Err("缩略图尺寸需在 96~512 之间".into());
+    }
     Ok(())
+}
+
+/// 记住缩略图尺寸（滑块/Ctrl+滚轮改的浏览密度；轻量落盘不触发缓存淘汰）
+#[tauri::command]
+pub fn remember_tile_size(app: tauri::AppHandle, size: u32) {
+    if !(96..=512).contains(&size) {
+        return;
+    }
+    let mut s = load(&app);
+    if s.tile_size != size {
+        s.tile_size = size;
+        let _ = save(&app, &s);
+    }
 }
 
 #[tauri::command]
@@ -85,6 +107,17 @@ pub fn remember_folder(app: tauri::AppHandle, path: String) {
     let mut s = load(&app);
     if s.last_folder.as_deref() != Some(path.as_str()) {
         s.last_folder = Some(path);
+        let _ = save(&app, &s);
+    }
+}
+
+/// 记住工作集（多文件夹合并浏览；单文件夹工作集亦然）
+#[tauri::command]
+pub fn remember_workset(app: tauri::AppHandle, paths: Vec<String>) {
+    let mut s = load(&app);
+    if s.last_folders != paths {
+        s.last_folder = paths.first().cloned(); // 同步旧字段（兼容旧逻辑读取）
+        s.last_folders = paths;
         let _ = save(&app, &s);
     }
 }
@@ -137,6 +170,7 @@ pub fn set_settings(app: tauri::AppHandle, state: tauri::State<crate::AppState>,
     merged.cache_limit_mb = settings.cache_limit_mb;
     merged.default_sort = settings.default_sort;
     merged.theme = settings.theme;
+    // tile_size 不在此处合并：单一写入口是 remember_tile_size（避免旧值覆盖滚轮/滑块的修改）
     let limit = merged.cache_limit_mb as u64 * 1024 * 1024;
     state.thumb.max_cache_bytes.store(limit, Ordering::Relaxed);
     save(&app, &merged)?;

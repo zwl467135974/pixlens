@@ -1,7 +1,7 @@
 /** 排序 / 过滤 / 增量补丁（doc/01 F1） */
 import type { Entry, FsChanged } from "./ipc";
 
-export type SortKey = "name" | "mtime" | "size" | "type";
+export type SortKey = "name" | "mtime" | "size" | "type" | "folder";
 export type SortDir = 1 | -1;
 
 /** 自然排序：数字段按数值比较（img_2 < img_10）；
@@ -133,6 +133,9 @@ function compareByKey(key: SortKey, a: Entry, b: Entry, dates: Map<string, numbe
       return mediaDate(a, b, dates);
     case "size":
       return a.size - b.size;
+    case "folder":
+      // 合并浏览：按来源文件夹分区（同文件夹聚在一起），文件夹内按名称
+      return cmpText(dirname(a.path), dirname(b.path)) || naturalCompare(a.name, b.name);
     case "type":
       // Explorer"类型"列是描述串（"JPEG 文件"等）而非扩展名——用同款字符串排序对齐
       return cmpText(a.typeName || a.ext, b.typeName || b.ext);
@@ -140,4 +143,9 @@ function compareByKey(key: SortKey, a: Entry, b: Entry, dates: Map<string, numbe
     default:
       return naturalCompare(a.name, b.name);
   }
+}
+
+function dirname(p: string): string {
+  const i = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
+  return i > 0 ? p.slice(0, i) : p;
 }
